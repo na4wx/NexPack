@@ -1,0 +1,20 @@
+#!/usr/bin/env node
+const { spawnSync } = require('child_process');
+const path = require('path');
+
+const files = [
+  'test_kiss_port_nibble.js',
+  'test_terminal_kisstcp.js',
+  'test_terminal_serial.js',
+  'test_terminal_agwpe.js'
+];
+
+let failed = 0;
+for (const f of files) {
+  console.log(`\n=== ${f} ===`);
+  const res = spawnSync(process.execPath, [path.join(__dirname, f)], { stdio: 'inherit' });
+  if (res.status !== 0) failed++;
+}
+
+console.log(`\n${files.length - failed}/${files.length} test files passed`);
+process.exit(failed > 0 ? 1 : 0);

@@ -1,0 +1,75 @@
+{
+  "name": "nexpack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NexPack — standalone multi-TNC/multi-radio packet terminal, Winlink+BBS, Chat, and APRS companion app for NexDigi",
+  "author": "Jordan G Webb, NA4WX",
+  "license": "MIT",
+  "main": "electron/main/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron -c blue,green \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on tcp:5180 && cross-env NODE_ENV=development electron .",
+    "build:renderer": "vite build",
+    "build": "npm run build:renderer && electron-builder",
+    "build:win": "npm run build:renderer && electron-builder --win",
+    "build:mac": "npm run build:renderer && electron-builder --mac",
+    "build:linux": "npm run build:renderer && electron-builder --linux",
+    "test": "node test/run-all.js"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.13.3",
+    "@emotion/styled": "^11.13.0",
+    "@mui/icons-material": "^5.15.0",
+    "@mui/material": "^5.15.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "serialport": "^12.0.0"
+  },
+  "devDependencies": {
+    "@serialport/binding-mock": "^10.2.2",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^32.0.0",
+    "electron-builder": "^24.13.3",
+    "vite": "^6.0.0",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.na4wx.nexpack",
+    "productName": "NexPack",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "msi",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "msi": {
+      "oneClick": false,
+      "perMachine": false
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": ["deb"],
+      "category": "HamRadio",
+      "maintainer": "Jordan G Webb <jwebb@shekinatech.com>"
+    }
+  }
+}
