@@ -4,12 +4,14 @@ const TncManager = require('./tnc/TncManager');
 const PatManager = require('./winlink/PatManager');
 const NexDigiClient = require('./bbs/NexDigiClient');
 const ChatManager = require('./chat/ChatManager');
+const AprsManager = require('./aprs/AprsManager');
 
 let mainWindow;
 let tncManager;
 let patManager;
 let nexDigiClient;
 let chatManager;
+let aprsManager;
 
 function forwardToRenderer(eventName) {
   tncManager.on(eventName, (payload) => {
@@ -42,12 +44,17 @@ app.whenReady().then(() => {
   patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
   nexDigiClient = new NexDigiClient({ userDataDir: app.getPath('userData') });
   chatManager = new ChatManager({ nexDigiClient });
+  aprsManager = new AprsManager({ userDataDir: app.getPath('userData'), tncManager });
 
   patManager.on('log', (line) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', line); });
   patManager.on('status', (status) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-status', status); });
 
   for (const evt of ['chat-event', 'chat-error', 'chat-socket-closed']) {
     chatManager.on(evt, (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(evt, payload); });
+  }
+
+  for (const evt of ['aprs-station', 'aprs-is-status']) {
+    aprsManager.on(evt, (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(evt, payload); });
   }
 
   forwardToRenderer('monitor');
@@ -119,6 +126,13 @@ app.whenReady().then(() => {
   ipcMain.handle('chat:sendMessage', (_e, text) => chatManager.sendMessage(text));
   ipcMain.handle('chat:sendTyping', (_e, typing) => chatManager.sendTyping(typing));
 
+  // APRS (RF via TncManager, always-on if TNCs are configured; APRS-IS optional)
+  ipcMain.handle('aprs:getStations', () => aprsManager.getStations());
+  ipcMain.handle('aprs:getSettings', () => aprsManager.getSettings());
+  ipcMain.handle('aprs:saveSettings', (_e, settings) => aprsManager.saveSettings(settings));
+  ipcMain.handle('aprs:connectAprsIs', () => aprsManager.connectAprsIs());
+  ipcMain.handle('aprs:disconnectAprsIs', () => aprsManager.disconnectAprsIs());
+
   createWindow();
 
   app.on('activate', () => {
@@ -129,6 +143,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (tncManager) tncManager.shutdown();
   if (chatManager) chatManager.disconnect();
+  if (aprsManager) aprsManager.shutdown();
   if (process.platform !== 'darwin') app.quit();
 });
 

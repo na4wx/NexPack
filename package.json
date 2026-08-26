@@ -25,8 +25,10 @@
     "@emotion/styled": "^11.13.0",
     "@mui/icons-material": "^5.15.0",
     "@mui/material": "^5.15.0",
+    "leaflet": "^1.9.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-leaflet": "^4.2.1",
     "serialport": "^12.0.0",
     "ws": "^8.18.0"
   },
@@ -55,7 +57,9 @@
       "target": [
         {
           "target": "msi",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -64,11 +68,15 @@
       "perMachine": false
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.utilities"
     },
     "linux": {
-      "target": ["deb"],
+      "target": [
+        "deb"
+      ],
       "category": "HamRadio",
       "maintainer": "Jordan G Webb <jwebb@shekinatech.com>"
     }

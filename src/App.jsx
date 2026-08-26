@@ -10,6 +10,7 @@ import TerminalWorkspace from './pages/TerminalWorkspace';
 import TncManagerPage from './pages/TncManagerPage';
 import MailWorkspace from './pages/MailWorkspace';
 import ChatWorkspace from './pages/ChatWorkspace';
+import AprsWorkspace from './pages/AprsWorkspace';
 
 const RAIL_WIDTH = 76;
 
@@ -18,7 +19,7 @@ const NAV_ITEMS = [
   { key: 'tncs', label: 'TNCs & Radios', icon: <RouterIcon /> },
   { key: 'winlink', label: 'Winlink / BBS', icon: <MailIcon /> },
   { key: 'chat', label: 'Chat', icon: <ChatIcon /> },
-  { key: 'aprs', label: 'APRS', icon: <MapIcon />, comingSoon: true }
+  { key: 'aprs', label: 'APRS', icon: <MapIcon /> }
 ];
 
 export default function App() {
@@ -64,6 +65,7 @@ export default function App() {
         {page === 'tncs' && <TncManagerPage tncs={tncs} onChange={refresh} />}
         {page === 'winlink' && <MailWorkspace />}
         {page === 'chat' && <ChatWorkspace />}
+        {page === 'aprs' && <AprsWorkspace />}
       </Box>
     </Box>
   );

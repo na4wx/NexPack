@@ -70,5 +70,14 @@ contextBridge.exposeInMainWorld('nexdigi', {
   // never actually arrives on the wire; this dispatches on msg.type itself).
   onChatEvent: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('chat-event', l); return () => ipcRenderer.removeListener('chat-event', l); },
   onChatError: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('chat-error', l); return () => ipcRenderer.removeListener('chat-error', l); },
-  onChatSocketClosed: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('chat-socket-closed', l); return () => ipcRenderer.removeListener('chat-socket-closed', l); }
+  onChatSocketClosed: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('chat-socket-closed', l); return () => ipcRenderer.removeListener('chat-socket-closed', l); },
+
+  // APRS (RF via TncManager, always-on; APRS-IS optional)
+  aprsGetStations: () => ipcRenderer.invoke('aprs:getStations'),
+  aprsGetSettings: () => ipcRenderer.invoke('aprs:getSettings'),
+  aprsSaveSettings: (settings) => ipcRenderer.invoke('aprs:saveSettings', settings),
+  aprsConnectAprsIs: () => ipcRenderer.invoke('aprs:connectAprsIs'),
+  aprsDisconnectAprsIs: () => ipcRenderer.invoke('aprs:disconnectAprsIs'),
+  onAprsStation: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-station', l); return () => ipcRenderer.removeListener('aprs-station', l); },
+  onAprsIsStatus: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-is-status', l); return () => ipcRenderer.removeListener('aprs-is-status', l); }
 });

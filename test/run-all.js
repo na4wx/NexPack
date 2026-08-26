@@ -10,7 +10,9 @@ const files = [
   'test_winlink_orphan_reap.js',
   'test_winlink_connect_guard.js',
   'test_winlink_start_race.js',
-  'test_winlink_settings_restart.js'
+  'test_winlink_settings_restart.js',
+  'test_aprs_parser.js',
+  'test_aprs_manager_rf.js'
 ];
 
 let failed = 0;
