@@ -3,11 +3,13 @@ const path = require('path');
 const TncManager = require('./tnc/TncManager');
 const PatManager = require('./winlink/PatManager');
 const NexDigiClient = require('./bbs/NexDigiClient');
+const ChatManager = require('./chat/ChatManager');
 
 let mainWindow;
 let tncManager;
 let patManager;
 let nexDigiClient;
+let chatManager;
 
 function forwardToRenderer(eventName) {
   tncManager.on(eventName, (payload) => {
@@ -39,9 +41,14 @@ app.whenReady().then(() => {
   tncManager = new TncManager({ configPath: path.join(app.getPath('userData'), 'tncs.json') });
   patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
   nexDigiClient = new NexDigiClient({ userDataDir: app.getPath('userData') });
+  chatManager = new ChatManager({ nexDigiClient });
 
   patManager.on('log', (line) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', line); });
   patManager.on('status', (status) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-status', status); });
+
+  for (const evt of ['chat-event', 'chat-error', 'chat-socket-closed']) {
+    chatManager.on(evt, (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(evt, payload); });
+  }
 
   forwardToRenderer('monitor');
   forwardToRenderer('tnc-status');
@@ -102,6 +109,16 @@ app.whenReady().then(() => {
   ipcMain.handle('bbs:listBulletins', () => nexDigiClient.listBulletins());
   ipcMain.handle('bbs:getStats', () => nexDigiClient.getStats());
 
+  // Chat (via NexDigi server REST + shared WebSocket)
+  ipcMain.handle('chat:connect', () => chatManager.connect());
+  ipcMain.handle('chat:disconnect', () => chatManager.disconnect());
+  ipcMain.handle('chat:listRooms', () => chatManager.listRooms());
+  ipcMain.handle('chat:createRoom', (_e, name, description) => chatManager.createRoom(name, description));
+  ipcMain.handle('chat:switchRoom', (_e, name) => chatManager.switchRoom(name));
+  ipcMain.handle('chat:getRoomUsers', (_e, name) => chatManager.getRoomUsers(name));
+  ipcMain.handle('chat:sendMessage', (_e, text) => chatManager.sendMessage(text));
+  ipcMain.handle('chat:sendTyping', (_e, typing) => chatManager.sendTyping(typing));
+
   createWindow();
 
   app.on('activate', () => {
@@ -111,6 +128,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (tncManager) tncManager.shutdown();
+  if (chatManager) chatManager.disconnect();
   if (process.platform !== 'darwin') app.quit();
 });
 

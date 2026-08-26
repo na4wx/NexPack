@@ -6,7 +6,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import MessageList from '../components/MessageList';
 import MessageReadPane from '../components/MessageReadPane';
 import ComposeDialog from '../components/ComposeDialog';
-import BbsSettingsDialog from '../components/BbsSettingsDialog';
+import NexDigiServerSettingsDialog from '../components/NexDigiServerSettingsDialog';
 
 const CATEGORY_LABEL = { P: 'Personal', B: 'Bulletin', T: 'Traffic', E: 'Emergency', A: 'Admin' };
 
@@ -62,7 +62,7 @@ export default function BbsMail() {
           BBS messages live on your NexDigi digipeater — add its address and password to read and post them.
         </Typography>
         <Button variant="contained" onClick={() => setSettingsOpen(true)}>NexDigi server settings</Button>
-        <BbsSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} />
+        <NexDigiServerSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} />
       </Box>
     );
   }
@@ -116,7 +116,7 @@ export default function BbsMail() {
         initialTo={selected ? selected.sender : ''}
         initialSubject={selected ? `Re: ${selected.subject}` : ''}
       />
-      <BbsSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} />
+      <NexDigiServerSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} />
     </Box>
   );
 }

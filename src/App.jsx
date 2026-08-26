@@ -9,6 +9,7 @@ import { useTncs } from './hooks/useTncs';
 import TerminalWorkspace from './pages/TerminalWorkspace';
 import TncManagerPage from './pages/TncManagerPage';
 import MailWorkspace from './pages/MailWorkspace';
+import ChatWorkspace from './pages/ChatWorkspace';
 
 const RAIL_WIDTH = 76;
 
@@ -16,7 +17,7 @@ const NAV_ITEMS = [
   { key: 'terminal', label: 'Terminal', icon: <TerminalIcon /> },
   { key: 'tncs', label: 'TNCs & Radios', icon: <RouterIcon /> },
   { key: 'winlink', label: 'Winlink / BBS', icon: <MailIcon /> },
-  { key: 'chat', label: 'Chat', icon: <ChatIcon />, comingSoon: true },
+  { key: 'chat', label: 'Chat', icon: <ChatIcon /> },
   { key: 'aprs', label: 'APRS', icon: <MapIcon />, comingSoon: true }
 ];
 
@@ -62,6 +63,7 @@ export default function App() {
         {page === 'terminal' && <TerminalWorkspace tncs={tncs} />}
         {page === 'tncs' && <TncManagerPage tncs={tncs} onChange={refresh} />}
         {page === 'winlink' && <MailWorkspace />}
+        {page === 'chat' && <ChatWorkspace />}
       </Box>
     </Box>
   );

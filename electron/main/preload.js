@@ -54,5 +54,21 @@ contextBridge.exposeInMainWorld('nexdigi', {
   bbsMarkRead: (messageNumber) => ipcRenderer.invoke('bbs:markRead', messageNumber),
   bbsDeleteMessage: (messageNumber) => ipcRenderer.invoke('bbs:deleteMessage', messageNumber),
   bbsListBulletins: () => ipcRenderer.invoke('bbs:listBulletins'),
-  bbsGetStats: () => ipcRenderer.invoke('bbs:getStats')
+  bbsGetStats: () => ipcRenderer.invoke('bbs:getStats'),
+
+  // Chat (NexDigi server REST + shared WebSocket)
+  chatConnect: () => ipcRenderer.invoke('chat:connect'),
+  chatDisconnect: () => ipcRenderer.invoke('chat:disconnect'),
+  chatListRooms: () => ipcRenderer.invoke('chat:listRooms'),
+  chatCreateRoom: (name, description) => ipcRenderer.invoke('chat:createRoom', name, description),
+  chatSwitchRoom: (name) => ipcRenderer.invoke('chat:switchRoom', name),
+  chatGetRoomUsers: (name) => ipcRenderer.invoke('chat:getRoomUsers', name),
+  chatSendMessage: (text) => ipcRenderer.invoke('chat:sendMessage', text),
+  chatSendTyping: (typing) => ipcRenderer.invoke('chat:sendTyping', typing),
+  // A single generic event carries every real server message (see
+  // ChatManager.js for why — the server's own 'chat-broadcast' wrapper type
+  // never actually arrives on the wire; this dispatches on msg.type itself).
+  onChatEvent: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('chat-event', l); return () => ipcRenderer.removeListener('chat-event', l); },
+  onChatError: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('chat-error', l); return () => ipcRenderer.removeListener('chat-error', l); },
+  onChatSocketClosed: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('chat-socket-closed', l); return () => ipcRenderer.removeListener('chat-socket-closed', l); }
 });

@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack } from '@mui/material';
 
-export default function BbsSettingsDialog({ open, onClose, onSaved }) {
+// Shared across BBS and Chat — both are real network clients to the same
+// running NexDigi server, using the same host/password/callsign, so there's
+// only ever one "NexDigi server" connection to configure in NexPack.
+export default function NexDigiServerSettingsDialog({ open, onClose, onSaved }) {
   const [host, setHost] = useState('');
   const [password, setPassword] = useState('');
   const [callsign, setCallsign] = useState('');
@@ -24,12 +27,12 @@ export default function BbsSettingsDialog({ open, onClose, onSaved }) {
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>NexDigi server (BBS)</DialogTitle>
+      <DialogTitle>NexDigi server</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField label="Host" value={host} onChange={(e) => setHost(e.target.value)} placeholder="localhost:3010" autoFocus />
           <TextField label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <TextField label="Your callsign" value={callsign} onChange={(e) => setCallsign(e.target.value)} placeholder="N0CALL" helperText="Used as the sender for messages you post" />
+          <TextField label="Your callsign" value={callsign} onChange={(e) => setCallsign(e.target.value)} placeholder="N0CALL" helperText="Used for BBS messages you post and your chat identity" />
         </Stack>
       </DialogContent>
       <DialogActions>
