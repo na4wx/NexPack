@@ -8,7 +8,8 @@ const files = [
   'test_terminal_serial.js',
   'test_terminal_agwpe.js',
   'test_winlink_orphan_reap.js',
-  'test_winlink_connect_guard.js'
+  'test_winlink_connect_guard.js',
+  'test_winlink_start_race.js'
 ];
 
 let failed = 0;

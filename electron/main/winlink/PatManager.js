@@ -123,7 +123,17 @@ class PatManager extends EventEmitter {
     return merged;
   }
 
-  async start() {
+  // Re-entrant: a second call while the first is still starting up (e.g.
+  // React's dev-mode double-effect invocation) returns the SAME in-flight
+  // promise, rather than racing past a `this.proc` truthiness check that
+  // gets set before the server is actually confirmed listening.
+  start() {
+    if (this._startPromise) return this._startPromise;
+    this._startPromise = this._doStart().finally(() => { this._startPromise = null; });
+    return this._startPromise;
+  }
+
+  async _doStart() {
     if (this.proc) return;
     if (!this.getSettings()) throw new Error('Winlink settings not configured yet');
 
