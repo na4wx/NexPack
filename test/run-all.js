@@ -9,7 +9,8 @@ const files = [
   'test_terminal_agwpe.js',
   'test_winlink_orphan_reap.js',
   'test_winlink_connect_guard.js',
-  'test_winlink_start_race.js'
+  'test_winlink_start_race.js',
+  'test_winlink_settings_restart.js'
 ];
 
 let failed = 0;

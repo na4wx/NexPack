@@ -108,7 +108,16 @@ class PatManager extends EventEmitter {
 
   // Writes pat's config.json from NexPack's own Winlink settings form.
   // `connectAliases` lets the user name RF (ax25:///CALLSIGN) and Telnet targets.
-  saveSettings({ callsign, winlinkPassword, connectAliases = {}, ax25, agwpe }) {
+  //
+  // pat reads its config once at startup and never hot-reloads it — a file
+  // write alone does nothing to an already-running process. Without the
+  // restart below, editing your callsign/password while pat is running
+  // (e.g. fixing a typo after a failed login) silently keeps using the OLD
+  // in-memory value for every future connect attempt until the whole app
+  // is restarted, which is exactly what happened during manual testing: a
+  // password change was saved correctly to disk the whole time, but the
+  // already-running pat process never picked it up.
+  async saveSettings({ callsign, winlinkPassword, connectAliases = {}, ax25, agwpe }) {
     const base = this.getSettings() || {};
     const merged = {
       ...base,
@@ -120,6 +129,11 @@ class PatManager extends EventEmitter {
       agwpe: agwpe || base.agwpe || { addr: '127.0.0.1:8000', radio_port: 0 }
     };
     fs.writeFileSync(this.configPath, JSON.stringify(merged, null, 2));
+    if (this.proc || this._startPromise) {
+      this.emit('log', 'Settings changed — restarting pat so the new values take effect...\n');
+      await this.stop();
+      await this.start();
+    }
     return merged;
   }
 
