@@ -6,7 +6,9 @@ const files = [
   'test_kiss_port_nibble.js',
   'test_terminal_kisstcp.js',
   'test_terminal_serial.js',
-  'test_terminal_agwpe.js'
+  'test_terminal_agwpe.js',
+  'test_winlink_orphan_reap.js',
+  'test_winlink_connect_guard.js'
 ];
 
 let failed = 0;

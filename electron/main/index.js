@@ -111,6 +111,20 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (tncManager) tncManager.shutdown();
-  if (patManager) patManager.stop();
   if (process.platform !== 'darwin') app.quit();
+});
+
+// `stop()` is async (SIGTERM, then SIGKILL after a grace period) so pat
+// isn't orphaned on a clean quit — that's the case start()'s stale-process
+// reaper can't help with, since the reaper only runs on the *next* launch.
+// A crash or `kill -9` still can't be caught here (nothing in Node can);
+// the startup reaper in PatManager.start() is the real backstop for that.
+let quitting = false;
+app.on('before-quit', (event) => {
+  if (quitting) return;
+  quitting = true;
+  event.preventDefault();
+  Promise.resolve(patManager ? patManager.stop() : null)
+    .catch(() => {})
+    .finally(() => app.quit());
 });

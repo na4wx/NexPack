@@ -1,9 +1,11 @@
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const EventEmitter = require('events');
 const WebSocket = require('ws');
+
+const CONNECT_TIMEOUT_MS = 120000;
 
 // Manages a bundled `pat` (github.com/la5nta/pat, GPL-3.0) subprocess as
 // NexPack's real Winlink client. Real B2F (proposal exchange, LZHUF
@@ -37,11 +39,54 @@ class PatManager extends EventEmitter {
     this.dataDir = path.join(userDataDir, 'winlink');
     this.configPath = path.join(this.dataDir, 'config.json');
     this.mboxDir = path.join(this.dataDir, 'mbox');
+    this.pidFilePath = path.join(this.dataDir, 'pat.pid');
     this.resourcesPath = resourcesPath;
     this.port = null;
     this.proc = null;
     this.ws = null;
+    this._connecting = false;
     fs.mkdirSync(this.mboxDir, { recursive: true });
+  }
+
+  // If a previous run of NexPack died without cleanly stopping pat (crash,
+  // force-quit, kill -9 — none of which JS shutdown handlers can catch),
+  // the subprocess is orphaned but keeps running. It can then serialize a
+  // stuck/slow session behind any future connect attempt, which looks like
+  // NexPack itself hanging. Called before every start() to reap it first.
+  async _reapStaleProcess() {
+    let pid;
+    try { pid = parseInt(fs.readFileSync(this.pidFilePath, 'utf8').trim(), 10); } catch (e) { return; }
+    if (!pid || Number.isNaN(pid)) { this._removePidFile(); return; }
+    if (!this._isAlive(pid)) { this._removePidFile(); return; }
+    if (!this._looksLikePat(pid)) { this._removePidFile(); return; } // pid reused by an unrelated process
+    this.emit('log', `Found a leftover pat process (pid ${pid}) from a previous run — stopping it before starting a fresh one.\n`);
+    await this._killPid(pid);
+    this._removePidFile();
+  }
+
+  _isAlive(pid) {
+    try { process.kill(pid, 0); return true; } catch (e) { return false; }
+  }
+
+  _looksLikePat(pid) {
+    if (process.platform === 'win32') return true; // best-effort elsewhere; skip the comm-name check
+    try {
+      const comm = execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' }).trim();
+      return /\bpat(\.exe)?$/i.test(comm) || comm.toLowerCase().includes('pat');
+    } catch (e) {
+      return false; // process vanished or ps failed — treat as not-ours, don't kill blindly
+    }
+  }
+
+  async _killPid(pid) {
+    try { process.kill(pid, 'SIGTERM'); } catch (e) { return; }
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && this._isAlive(pid)) { await new Promise((r) => setTimeout(r, 100)); }
+    if (this._isAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch (e) { /* ignore */ } }
+  }
+
+  _removePidFile() {
+    try { fs.unlinkSync(this.pidFilePath); } catch (e) { /* ignore */ }
   }
 
   _resolveBinaryPath() {
@@ -82,6 +127,8 @@ class PatManager extends EventEmitter {
     if (this.proc) return;
     if (!this.getSettings()) throw new Error('Winlink settings not configured yet');
 
+    await this._reapStaleProcess();
+
     // Port 0 above means "let pat pick a free port"; we ask the OS for one
     // ourselves and pin it in the config so we know it before spawning.
     const net = require('net');
@@ -96,9 +143,10 @@ class PatManager extends EventEmitter {
 
     const bin = this._resolveBinaryPath();
     this.proc = spawn(bin, ['--config', this.configPath, '--mbox', this.mboxDir, 'http'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    fs.writeFileSync(this.pidFilePath, String(this.proc.pid));
     this.proc.stdout.on('data', (d) => this.emit('log', d.toString()));
     this.proc.stderr.on('data', (d) => this.emit('log', d.toString()));
-    this.proc.on('exit', (code) => { this.emit('exit', code); this.proc = null; this._closeSocket(); });
+    this.proc.on('exit', (code) => { this.emit('exit', code); this.proc = null; this._removePidFile(); this._closeSocket(); });
     this.proc.on('error', (err) => this.emit('error', err));
 
     await this._waitForHttp();
@@ -132,18 +180,29 @@ class PatManager extends EventEmitter {
     this.ws = null;
   }
 
-  stop() {
+  // Async and defensive: SIGTERM, then SIGKILL if it hasn't exited after a
+  // few seconds. Safe to call even if start() never ran, or was called
+  // multiple times (app quit + explicit user action racing each other).
+  async stop() {
     this._closeSocket();
-    if (this.proc) { this.proc.kill(); this.proc = null; }
+    if (!this.proc) return;
+    const pid = this.proc.pid;
+    this.proc.kill('SIGTERM');
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && this._isAlive(pid)) { await new Promise((r) => setTimeout(r, 100)); }
+    if (this._isAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch (e) { /* ignore */ } }
+    this.proc = null;
+    this._removePidFile();
   }
 
   _url(p) { return `http://127.0.0.1:${this.port}${p}`; }
 
-  async _request(method, urlPath, { json, headers } = {}) {
+  async _request(method, urlPath, { json, headers, timeoutMs = 20000 } = {}) {
     const res = await fetch(this._url(urlPath), {
       method,
       headers: { ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(headers || {}) },
-      body: json !== undefined ? JSON.stringify(json) : undefined
+      body: json !== undefined ? JSON.stringify(json) : undefined,
+      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
     });
     const text = await res.text();
     if (!res.ok) throw new Error(`pat ${method} ${urlPath} -> ${res.status}: ${text}`);
@@ -179,8 +238,30 @@ class PatManager extends EventEmitter {
   removeConnectAlias(name) { return this._request('DELETE', `/api/config/connect_aliases/${encodeURIComponent(name)}`); }
 
   // Blocks until the connect session completes (pat's own behavior) —
-  // callers should await this from a IPC handler, not the renderer directly.
-  connect(url) { return this._request('GET', `/api/connect?url=${encodeURIComponent(url)}`); }
+  // callers should await this from an IPC handler, not the renderer directly.
+  // Guarded against overlapping calls: pat serializes connect sessions
+  // internally, so a second concurrent call would just queue silently
+  // behind the first and *look* like a hang — reject it immediately with a
+  // clear reason instead. Also bounded by CONNECT_TIMEOUT_MS: a real B2F
+  // session can legitimately take a while, but if pat itself wedges (as
+  // happened when a prior NexPack process died and orphaned it), we try to
+  // unstick it via disconnect(true) rather than leaving the UI stuck.
+  async connect(url) {
+    if (this._connecting) throw new Error('A Winlink connection is already in progress');
+    this._connecting = true;
+    try {
+      return await this._request('GET', `/api/connect?url=${encodeURIComponent(url)}`, { timeoutMs: CONNECT_TIMEOUT_MS });
+    } catch (e) {
+      if (e.name === 'TimeoutError' || e.name === 'AbortError') {
+        try { await this.disconnect(true); } catch (e2) { /* best-effort unstick */ }
+        throw new Error(`Connect timed out after ${CONNECT_TIMEOUT_MS / 1000}s and was aborted`);
+      }
+      throw e;
+    } finally {
+      this._connecting = false;
+    }
+  }
+
   disconnect(dirty = false) { return this._request('POST', `/api/disconnect?dirty=${dirty}`); }
 
   searchRms(params = {}) {
