@@ -24,5 +24,35 @@ contextBridge.exposeInMainWorld('nexdigi', {
   onTncStatus: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('tnc-status', l); return () => ipcRenderer.removeListener('tnc-status', l); },
   onTncListChanged: (cb) => { const l = () => cb(); ipcRenderer.on('tnc-list-changed', l); return () => ipcRenderer.removeListener('tnc-list-changed', l); },
   onSessionState: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-state', l); return () => ipcRenderer.removeListener('session-state', l); },
-  onSessionData: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-data', l); return () => ipcRenderer.removeListener('session-data', l); }
+  onSessionData: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-data', l); return () => ipcRenderer.removeListener('session-data', l); },
+
+  // Winlink (bundled pat subprocess)
+  winlinkGetSettings: () => ipcRenderer.invoke('winlink:getSettings'),
+  winlinkSaveSettings: (settings) => ipcRenderer.invoke('winlink:saveSettings', settings),
+  winlinkStart: () => ipcRenderer.invoke('winlink:start'),
+  winlinkStop: () => ipcRenderer.invoke('winlink:stop'),
+  winlinkListMessages: (folder) => ipcRenderer.invoke('winlink:listMessages', folder),
+  winlinkGetMessage: (folder, mid) => ipcRenderer.invoke('winlink:getMessage', folder, mid),
+  winlinkMarkRead: (folder, mid, read) => ipcRenderer.invoke('winlink:markRead', folder, mid, read),
+  winlinkDeleteMessage: (folder, mid) => ipcRenderer.invoke('winlink:deleteMessage', folder, mid),
+  winlinkArchiveMessage: (folder, mid) => ipcRenderer.invoke('winlink:archiveMessage', folder, mid),
+  winlinkSendMessage: (message) => ipcRenderer.invoke('winlink:sendMessage', message),
+  winlinkGetConnectAliases: () => ipcRenderer.invoke('winlink:getConnectAliases'),
+  winlinkSetConnectAlias: (name, url) => ipcRenderer.invoke('winlink:setConnectAlias', name, url),
+  winlinkRemoveConnectAlias: (name) => ipcRenderer.invoke('winlink:removeConnectAlias', name),
+  winlinkConnect: (url) => ipcRenderer.invoke('winlink:connect', url),
+  winlinkDisconnect: (dirty) => ipcRenderer.invoke('winlink:disconnect', dirty),
+  winlinkSearchRms: (params) => ipcRenderer.invoke('winlink:searchRms', params),
+  onWinlinkLog: (cb) => { const l = (_e, line) => cb(line); ipcRenderer.on('winlink-log', l); return () => ipcRenderer.removeListener('winlink-log', l); },
+  onWinlinkStatus: (cb) => { const l = (_e, status) => cb(status); ipcRenderer.on('winlink-status', l); return () => ipcRenderer.removeListener('winlink-status', l); },
+
+  // BBS (NexDigi server REST)
+  bbsGetSettings: () => ipcRenderer.invoke('bbs:getSettings'),
+  bbsSaveSettings: (settings) => ipcRenderer.invoke('bbs:saveSettings', settings),
+  bbsListMessages: (filters) => ipcRenderer.invoke('bbs:listMessages', filters),
+  bbsPostMessage: (message) => ipcRenderer.invoke('bbs:postMessage', message),
+  bbsMarkRead: (messageNumber) => ipcRenderer.invoke('bbs:markRead', messageNumber),
+  bbsDeleteMessage: (messageNumber) => ipcRenderer.invoke('bbs:deleteMessage', messageNumber),
+  bbsListBulletins: () => ipcRenderer.invoke('bbs:listBulletins'),
+  bbsGetStats: () => ipcRenderer.invoke('bbs:getStats')
 });

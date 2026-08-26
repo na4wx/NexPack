@@ -1,9 +1,13 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const TncManager = require('./tnc/TncManager');
+const PatManager = require('./winlink/PatManager');
+const NexDigiClient = require('./bbs/NexDigiClient');
 
 let mainWindow;
 let tncManager;
+let patManager;
+let nexDigiClient;
 
 function forwardToRenderer(eventName) {
   tncManager.on(eventName, (payload) => {
@@ -33,6 +37,11 @@ function createWindow() {
 
 app.whenReady().then(() => {
   tncManager = new TncManager({ configPath: path.join(app.getPath('userData'), 'tncs.json') });
+  patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
+  nexDigiClient = new NexDigiClient({ userDataDir: app.getPath('userData') });
+
+  patManager.on('log', (line) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', line); });
+  patManager.on('status', (status) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-status', status); });
 
   forwardToRenderer('monitor');
   forwardToRenderer('tnc-status');
@@ -65,6 +74,34 @@ app.whenReady().then(() => {
   ipcMain.handle('terminal:sendSessionText', (_e, sessionId, text) => tncManager.sendSessionText(sessionId, text));
   ipcMain.handle('terminal:endSession', (_e, sessionId) => tncManager.endSession(sessionId));
 
+  // Winlink (via bundled pat subprocess)
+  ipcMain.handle('winlink:getSettings', () => patManager.getSettings());
+  ipcMain.handle('winlink:saveSettings', (_e, settings) => patManager.saveSettings(settings));
+  ipcMain.handle('winlink:start', () => patManager.start());
+  ipcMain.handle('winlink:stop', () => patManager.stop());
+  ipcMain.handle('winlink:listMessages', (_e, folder) => patManager.listMessages(folder));
+  ipcMain.handle('winlink:getMessage', (_e, folder, mid) => patManager.getMessage(folder, mid));
+  ipcMain.handle('winlink:markRead', (_e, folder, mid, read) => patManager.markRead(folder, mid, read));
+  ipcMain.handle('winlink:deleteMessage', (_e, folder, mid) => patManager.deleteMessage(folder, mid));
+  ipcMain.handle('winlink:archiveMessage', (_e, folder, mid) => patManager.archiveMessage(folder, mid));
+  ipcMain.handle('winlink:sendMessage', (_e, message) => patManager.sendMessage(message));
+  ipcMain.handle('winlink:getConnectAliases', () => patManager.getConnectAliases());
+  ipcMain.handle('winlink:setConnectAlias', (_e, name, url) => patManager.setConnectAlias(name, url));
+  ipcMain.handle('winlink:removeConnectAlias', (_e, name) => patManager.removeConnectAlias(name));
+  ipcMain.handle('winlink:connect', (_e, url) => patManager.connect(url));
+  ipcMain.handle('winlink:disconnect', (_e, dirty) => patManager.disconnect(dirty));
+  ipcMain.handle('winlink:searchRms', (_e, params) => patManager.searchRms(params));
+
+  // BBS (via NexDigi server REST)
+  ipcMain.handle('bbs:getSettings', () => nexDigiClient.getSettings());
+  ipcMain.handle('bbs:saveSettings', (_e, settings) => nexDigiClient.saveSettings(settings));
+  ipcMain.handle('bbs:listMessages', (_e, filters) => nexDigiClient.listMessages(filters));
+  ipcMain.handle('bbs:postMessage', (_e, message) => nexDigiClient.postMessage(message));
+  ipcMain.handle('bbs:markRead', (_e, messageNumber) => nexDigiClient.markRead(messageNumber));
+  ipcMain.handle('bbs:deleteMessage', (_e, messageNumber) => nexDigiClient.deleteMessage(messageNumber));
+  ipcMain.handle('bbs:listBulletins', () => nexDigiClient.listBulletins());
+  ipcMain.handle('bbs:getStats', () => nexDigiClient.getStats());
+
   createWindow();
 
   app.on('activate', () => {
@@ -74,5 +111,6 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (tncManager) tncManager.shutdown();
+  if (patManager) patManager.stop();
   if (process.platform !== 'darwin') app.quit();
 });

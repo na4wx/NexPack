@@ -8,13 +8,14 @@ import MapIcon from '@mui/icons-material/MapOutlined';
 import { useTncs } from './hooks/useTncs';
 import TerminalWorkspace from './pages/TerminalWorkspace';
 import TncManagerPage from './pages/TncManagerPage';
+import MailWorkspace from './pages/MailWorkspace';
 
 const RAIL_WIDTH = 76;
 
 const NAV_ITEMS = [
   { key: 'terminal', label: 'Terminal', icon: <TerminalIcon /> },
   { key: 'tncs', label: 'TNCs & Radios', icon: <RouterIcon /> },
-  { key: 'winlink', label: 'Winlink / BBS', icon: <MailIcon />, comingSoon: true },
+  { key: 'winlink', label: 'Winlink / BBS', icon: <MailIcon /> },
   { key: 'chat', label: 'Chat', icon: <ChatIcon />, comingSoon: true },
   { key: 'aprs', label: 'APRS', icon: <MapIcon />, comingSoon: true }
 ];
@@ -60,6 +61,7 @@ export default function App() {
       <Box sx={{ flexGrow: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
         {page === 'terminal' && <TerminalWorkspace tncs={tncs} />}
         {page === 'tncs' && <TncManagerPage tncs={tncs} onChange={refresh} />}
+        {page === 'winlink' && <MailWorkspace />}
       </Box>
     </Box>
   );
