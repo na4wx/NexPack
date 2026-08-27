@@ -10,7 +10,7 @@ Prebuilt installers are on the [Releases page](https://github.com/na4wx/NexPack/
 
 - **macOS** — `.dmg` (Apple Silicon)
 - **Linux** — `.deb` (amd64 and arm64)
-- **Windows** — `.msi` (built from Windows or CI — see [Packaging](#packaging))
+- **Windows** — `.msi`
 
 ## Features
 
