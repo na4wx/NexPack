@@ -1,12 +1,24 @@
 # NexPack
 
-A standalone desktop companion app for [NexDigi](https://github.com/na4wx/NexDigi) — a multi-TNC, multi-radio packet terminal, with Winlink+BBS mail, Chat, and APRS sections planned.
+A standalone desktop companion app for [NexDigi](https://github.com/na4wx/NexDigi) — multi-TNC/multi-radio packet terminal, Winlink + BBS mail, Chat, and a full APRS client.
 
 Built with Electron + React + MUI. All TNC/radio I/O (serial, KISS-TCP, AGWPE) runs in the Electron main process; the renderer talks to it over IPC only.
 
-## Status
+## Downloads
 
-**Milestone 1 (in progress): Terminal + multi-TNC/multi-radio.** Winlink/BBS, Chat, and APRS come after that's solid — see the connected NexDigi server's REST/WS APIs, which those milestones will build against.
+Prebuilt installers are on the [Releases page](https://github.com/na4wx/NexPack/releases):
+
+- **macOS** — `.dmg` (Apple Silicon)
+- **Linux** — `.deb` (amd64 and arm64)
+- **Windows** — `.msi` (built from Windows or CI — see [Packaging](#packaging))
+
+## Features
+
+- **Terminal** — connected-mode AX.25 sessions over serial KISS, KISS-TCP, or real AGWPE, with multi-TNC/multi-radio support. Also supports digipeater paths (up to 8 hops), YAPP binary file transfer, per-session logging to disk, and saved connect scripts (e.g. automated BBS login handshakes).
+- **Winlink** — native B2F client (via a bundled [`pat`](https://github.com/la5nta/pat) subprocess) over RF (RMS Gateway) or Telnet, with your own Winlink account — messages live on your station, not on NexDigi.
+- **BBS** — read/post/delete NexDigi BBS mail either over the internet (NexDigi's REST API) or directly over RF, driving the digipeater's real AX.25 connected-mode BBS protocol with no internet required.
+- **Chat** — real-time chat against NexDigi's own chat protocol (REST + WebSocket).
+- **APRS** — a full client, not just a viewer: RF monitoring (always on, no APRS-IS required) plus optional APRS-IS, beaconing, messaging (with ack/retry), station detail (distance/bearing, packet log, weather, telemetry), objects/items, and a Leaflet map with custom station icons.
 
 ## Supported TNC connections
 
@@ -31,14 +43,18 @@ This runs the Vite dev server for the renderer and Electron in development mode 
 npm test
 ```
 
-Runs the full test suite: a pure KISS-framing unit test, plus three end-to-end tests that exercise the real adapters (KISS-TCP over a real TCP loopback bridge, serial over a hardware-free `SerialPortMock` null-modem simulation, and AGWPE against a minimal fake AGWPE server) — not mocks that bypass the code under test.
+Runs the full test suite — real end-to-end tests against the actual adapters and protocol code (KISS-TCP/serial/AGWPE loopbacks, real two-station AX.25 sessions, a real live NexDigi `BBSSessionManager` integration when the sibling [NexDigi](https://github.com/na4wx/NexDigi) repo is checked out alongside this one), not mocks that bypass the code under test.
 
 ## Packaging
 
 ```bash
-npm run build:win    # MSI
 npm run build:mac    # dmg
 npm run build:linux  # deb
+npm run build:win    # msi
 ```
 
 Uses `electron-builder`; output lands in `release/`.
+
+`build:win` needs Wine to cross-build on macOS/Linux, and Wine's `rcedit` step is currently broken on Apple Silicon hosts (a documented Wine/host-page-size incompatibility, not fixable by retrying) — build the MSI from an actual Windows machine, or from CI on a `windows-latest` runner.
+
+`build:linux` cross-builds cleanly from macOS via Docker (`electronuserland/builder:wine`), but must run against a native Linux filesystem (a Docker volume), not a bind-mounted macOS directory — node-gyp's native module rebuild fails over the bind mount.
