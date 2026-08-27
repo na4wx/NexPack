@@ -39,6 +39,31 @@ test('parsePosition: uncompressed format decodes a real-world sample packet', ()
   assert.strictEqual(pos.format, 'uncompressed');
 });
 
+test('parsePosition: timestamped report (DTI @) with a real overlay-character table ID decodes correctly', () => {
+  // Captured live from APRS-IS — a real repeater beacon that exposed two
+  // real bugs before being fixed: the '@' DTI's mandatory 7-byte timestamp
+  // wasn't skipped, AND the overlay-character table ID ('I', not '/'/'\')
+  // wasn't accepted — both caused this exact packet to fall through to the
+  // compressed-format regex and decode to a wildly wrong position.
+  const pos = parsePosition('@271415z3728.40NI08541.17W# 12.5V, 71.4F, NEW REPEATER 440.6125 + CC1');
+  assert.ok(pos, 'should parse as uncompressed, not fall through to compressed');
+  assert.strictEqual(pos.format, 'uncompressed');
+  approx(pos.latitude, 37 + 28.40 / 60, 0.0001, 'latitude');
+  approx(pos.longitude, -(85 + 41.17 / 60), 0.0001, 'longitude');
+  assert.strictEqual(pos.symbol, 'I#');
+});
+
+test('parsePosition: timestamped weather report (DTI @, table char /) decodes correctly, not as compressed', () => {
+  // Also captured live — a CWOP weather station. Same missing-timestamp
+  // bug as above, but with a plain '/' table char (isolates the timestamp
+  // fix from the overlay-character fix).
+  const pos = parsePosition('@271450z3424.82N/08615.90W_.../000g000t076r000p044P000b10146h82.weewx-5.3.1-Vantage');
+  assert.ok(pos, 'should parse as uncompressed');
+  assert.strictEqual(pos.format, 'uncompressed');
+  approx(pos.latitude, 34 + 24.82 / 60, 0.0001, 'latitude');
+  approx(pos.longitude, -(86 + 15.90 / 60), 0.0001, 'longitude');
+});
+
 test('parsePosition: compressed (Base91) format decodes correctly', () => {
   // "/5L!!<*e7>7P[" is APRS101's own canonical compressed-position example
   // (49°30'00"N/72°45'00"W) — but as it appears embedded in an Object

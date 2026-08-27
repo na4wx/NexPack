@@ -49,7 +49,30 @@ function parsePosition(payload) {
   // code" + "first char of the comment". Found via a build/parse round-trip
   // test. Fixed to capture the real table char (the lat/lon separator) and
   // exactly one real code char immediately after longitude.
-  const uncompressedMatch = content.match(/[!=@/](\d{4}\.\d{2}[NS])([/\\])(\d{5}\.\d{2}[EW])(.)/);
+  //
+  // The table-ID char class was [/\\] only (primary/alternate table) until
+  // a real-traffic diagnostic against the live APRS-IS network turned up
+  // stations decoding to wildly wrong, scattered coordinates. Cause #1:
+  // APRS allows an *overlay character* (a digit or uppercase letter) in
+  // that position instead of '/' or '\' — real packets like
+  // "...3728.40NI08541.17W#..." use it. Widened to accept the full legal
+  // set: '/', '\', or [0-9A-Z] (verified against aprs.org's own overlay
+  // documentation).
+  //
+  // Cause #2, bigger and far more common in real traffic: DTIs '@' and '/'
+  // are the *timestamped* position-report forms — a 7-byte timestamp
+  // (6 digits + a letter, e.g. "271450z") sits between the DTI and the
+  // actual lat/lon, which this regex never accounted for. Every timestamped
+  // report (the norm for weather stations, digipeaters, IGates — anything
+  // that isn't a bare '!' report) failed to match here and fell through to
+  // the *compressed*-format regex below, which is lax enough to match the
+  // same ASCII digits and reinterpret them as base91-encoded compressed
+  // coordinates — producing plausible-looking but essentially random
+  // positions. Confirmed live against real APRS-IS traffic (a filter
+  // guaranteeing genuinely-nearby stations decoded to points 1000+ km away
+  // before this fix). The timestamp is optional in the regex since DTIs
+  // '!' and '=' never carry one.
+  const uncompressedMatch = content.match(/[!=@/](?:\d{6}[A-Za-z])?(\d{4}\.\d{2}[NS])([/\\0-9A-Z])(\d{5}\.\d{2}[EW])(.)/);
   if (uncompressedMatch) {
     const [, latStr, symbolTable, lonStr, symbolCode] = uncompressedMatch;
     return { latitude: parseAPRSCoord(latStr), longitude: parseAPRSCoord(lonStr), symbol: symbolTable + symbolCode, format: 'uncompressed' };

@@ -105,6 +105,7 @@ contextBridge.exposeInMainWorld('nexdigi', {
   aprsSaveMyStation: (myStation) => ipcRenderer.invoke('aprs:saveMyStation', myStation),
   aprsBeaconNow: () => ipcRenderer.invoke('aprs:beaconNow'),
   aprsSendMessage: (toCallsign, text) => ipcRenderer.invoke('aprs:sendMessage', toCallsign, text),
+  aprsCancelMessage: (msgId) => ipcRenderer.invoke('aprs:cancelMessage', msgId),
   aprsGetMessages: () => ipcRenderer.invoke('aprs:getMessages'),
   aprsMarkMessageRead: (id) => ipcRenderer.invoke('aprs:markMessageRead', id),
   aprsCreateObject: (name, opts) => ipcRenderer.invoke('aprs:createObject', name, opts),

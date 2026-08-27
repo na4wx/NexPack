@@ -109,6 +109,22 @@ async function main() {
     assert.strictEqual(record.telemetry.last.scaled[1], 0.1 * 50 + 32, 'channel 2: a=0,b=0.1,c=32 -> 0.1*50+32=37');
   });
 
+  await test('cancelMessage() stops a pending retry immediately instead of waiting it out', async () => {
+    const sent = aprsA.sendMessage('NOBODY-9', 'will never be acked');
+    assert.ok(aprsA.pendingAcks.has(sent.msgId), 'a retry timer should be pending right after send');
+    aprsA.cancelMessage(sent.msgId);
+    assert.ok(!aprsA.pendingAcks.has(sent.msgId), 'the retry timer should be cleared immediately on cancel');
+    const record = aprsA.getMessages().find((m) => m.msgId === sent.msgId);
+    assert.strictEqual(record.status, 'cancelled', 'the message should be marked cancelled, not left as sent');
+  });
+
+  await test('cancelMessage() on an already-resolved message is a harmless no-op', async () => {
+    // sendMessage()/_updateMessageStatus() already exercised the acked path
+    // above (sendMessage() round-trips test) — cancelling an id that's no
+    // longer pending should not throw or corrupt state.
+    assert.doesNotThrow(() => aprsA.cancelMessage('not-a-real-id'));
+  });
+
   console.log(`\nTests passed: ${pass}`);
   console.log(`Tests failed: ${fail}`);
 

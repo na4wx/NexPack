@@ -156,7 +156,7 @@ function MyStationDialog({ open, onClose, onSaved, tncs }) {
     });
   }, [open]);
 
-  const submit = async () => {
+  const saveMyStation = async () => {
     const r = radios.find((x) => x.key === radioKey);
     const homePosition = (lat.trim() && lon.trim()) ? { lat: Number(lat), lon: Number(lon) } : null;
     await window.nexdigi.aprsSaveMyStation({
@@ -166,14 +166,35 @@ function MyStationDialog({ open, onClose, onSaved, tncs }) {
       homePosition,
       beacon: { enabled: beaconEnabled, intervalMinutes: Number(interval_) || 30, path: pathStr.trim(), tncId: r ? r.tncId : null, radioId: r ? r.radioId : null }
     });
-    onSaved();
-    onClose();
+  };
+
+  const submit = async () => {
+    setError('');
+    try {
+      await saveMyStation();
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError(e.message || String(e));
+    }
   };
 
   const beaconNow = async () => {
     setError('');
-    try { await submit(); await window.nexdigi.aprsBeaconNow(); }
-    catch (e) { setError(e.message || String(e)); }
+    // Save first, then beacon — and only close the dialog once BOTH have
+    // actually succeeded. Previously this called submit() (which closes
+    // the dialog immediately) before beaconing, so an error from a missing
+    // mycall/home-position had nowhere to display — the dialog was already
+    // gone by the time the beacon call failed, making the button appear to
+    // silently do nothing.
+    try {
+      await saveMyStation();
+      await window.nexdigi.aprsBeaconNow();
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError(e.message || String(e));
+    }
   };
 
   return (
@@ -244,7 +265,8 @@ function MessagesDialog({ open, onClose, initialTarget }) {
     setText('');
   };
 
-  const statusColor = { sent: 'default', acked: 'success', failed: 'error', rejected: 'error', received: 'info' };
+  const statusColor = { sent: 'default', acked: 'success', failed: 'error', rejected: 'error', received: 'info', cancelled: 'default' };
+  const cancel = (msgId) => window.nexdigi.aprsCancelMessage(msgId);
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
@@ -268,7 +290,14 @@ function MessagesDialog({ open, onClose, initialTarget }) {
                   <Typography variant="body2">{m.text}</Typography>
                 </Box>
                 {m.direction === 'out' && (
-                  <Chip size="small" label={m.status} color={statusColor[m.status] || 'default'} sx={{ mt: 0.3 }} />
+                  <Chip
+                    size="small"
+                    label={m.status}
+                    color={statusColor[m.status] || 'default'}
+                    sx={{ mt: 0.3 }}
+                    onDelete={m.status === 'sent' ? () => cancel(m.msgId) : undefined}
+                    deleteIcon={m.status === 'sent' ? <Tooltip title="Cancel — stop retrying"><CloseIcon fontSize="small" /></Tooltip> : undefined}
+                  />
                 )}
               </Box>
             ))}

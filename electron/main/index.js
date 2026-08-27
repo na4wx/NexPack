@@ -174,6 +174,7 @@ app.whenReady().then(() => {
   ipcMain.handle('aprs:saveMyStation', (_e, myStation) => aprsManager.saveMyStation(myStation));
   ipcMain.handle('aprs:beaconNow', () => aprsManager.beaconNow());
   ipcMain.handle('aprs:sendMessage', (_e, toCallsign, text) => aprsManager.sendMessage(toCallsign, text));
+  ipcMain.handle('aprs:cancelMessage', (_e, msgId) => aprsManager.cancelMessage(msgId));
   ipcMain.handle('aprs:getMessages', () => aprsManager.getMessages());
   ipcMain.handle('aprs:markMessageRead', (_e, id) => aprsManager.markMessageRead(id));
   ipcMain.handle('aprs:createObject', (_e, name, opts) => aprsManager.createObject(name, opts));

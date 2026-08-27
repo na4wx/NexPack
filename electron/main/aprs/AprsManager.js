@@ -174,6 +174,11 @@ class AprsManager extends EventEmitter {
 
   // ---- RF ingestion ----
   _handleRfFrame(evt) {
+    // TncManager's 'monitor' event fires for both rx AND our own tx frames —
+    // without this check, sending anything (a beacon, a message) makes us
+    // "hear" our own transmission as if it were real incoming RF traffic
+    // from ourselves (e.g. a phantom "received" copy of a message we just sent).
+    if (evt.direction !== 'rx') return;
     if (evt.frameType !== 'ui' || !evt.text) return;
     const srcAddr = (evt.addresses && evt.addresses[1]) || null;
     if (!srcAddr) return;
@@ -285,6 +290,13 @@ class AprsManager extends EventEmitter {
       this._scheduleRetry(msgId, addressee, text, retries + 1);
     }, MESSAGE_RETRY_MS);
     this.pendingAcks.set(msgId, { addressee, text, retries, timer });
+  }
+
+  // User-initiated abort of a still-retrying outgoing message — stops the
+  // retry timer immediately rather than waiting out the remaining attempts.
+  cancelMessage(msgId) {
+    if (!this.pendingAcks.has(msgId)) return; // already resolved (acked/failed/rejected) or unknown
+    this._updateMessageStatus(msgId, 'cancelled');
   }
 
   _updateMessageStatus(msgId, status) {
