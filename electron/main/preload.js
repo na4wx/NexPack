@@ -78,6 +78,19 @@ contextBridge.exposeInMainWorld('nexdigi', {
   aprsSaveSettings: (settings) => ipcRenderer.invoke('aprs:saveSettings', settings),
   aprsConnectAprsIs: () => ipcRenderer.invoke('aprs:connectAprsIs'),
   aprsDisconnectAprsIs: () => ipcRenderer.invoke('aprs:disconnectAprsIs'),
+  aprsGetMyStation: () => ipcRenderer.invoke('aprs:getMyStation'),
+  aprsSaveMyStation: (myStation) => ipcRenderer.invoke('aprs:saveMyStation', myStation),
+  aprsBeaconNow: () => ipcRenderer.invoke('aprs:beaconNow'),
+  aprsSendMessage: (toCallsign, text) => ipcRenderer.invoke('aprs:sendMessage', toCallsign, text),
+  aprsGetMessages: () => ipcRenderer.invoke('aprs:getMessages'),
+  aprsMarkMessageRead: (id) => ipcRenderer.invoke('aprs:markMessageRead', id),
+  aprsCreateObject: (name, opts) => ipcRenderer.invoke('aprs:createObject', name, opts),
+  aprsKillObject: (name) => ipcRenderer.invoke('aprs:killObject', name),
+  aprsGetObjects: () => ipcRenderer.invoke('aprs:getObjects'),
   onAprsStation: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-station', l); return () => ipcRenderer.removeListener('aprs-station', l); },
-  onAprsIsStatus: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-is-status', l); return () => ipcRenderer.removeListener('aprs-is-status', l); }
+  onAprsIsStatus: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-is-status', l); return () => ipcRenderer.removeListener('aprs-is-status', l); },
+  onAprsMessage: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-message', l); return () => ipcRenderer.removeListener('aprs-message', l); },
+  onAprsObject: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-object', l); return () => ipcRenderer.removeListener('aprs-object', l); },
+  onAprsBeaconSent: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-beacon-sent', l); return () => ipcRenderer.removeListener('aprs-beacon-sent', l); },
+  onAprsError: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-error', l); return () => ipcRenderer.removeListener('aprs-error', l); }
 });

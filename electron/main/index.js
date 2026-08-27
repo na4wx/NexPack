@@ -53,7 +53,7 @@ app.whenReady().then(() => {
     chatManager.on(evt, (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(evt, payload); });
   }
 
-  for (const evt of ['aprs-station', 'aprs-is-status']) {
+  for (const evt of ['aprs-station', 'aprs-is-status', 'aprs-message', 'aprs-object', 'aprs-beacon-sent', 'aprs-error']) {
     aprsManager.on(evt, (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(evt, payload); });
   }
 
@@ -132,6 +132,15 @@ app.whenReady().then(() => {
   ipcMain.handle('aprs:saveSettings', (_e, settings) => aprsManager.saveSettings(settings));
   ipcMain.handle('aprs:connectAprsIs', () => aprsManager.connectAprsIs());
   ipcMain.handle('aprs:disconnectAprsIs', () => aprsManager.disconnectAprsIs());
+  ipcMain.handle('aprs:getMyStation', () => aprsManager.getMyStation());
+  ipcMain.handle('aprs:saveMyStation', (_e, myStation) => aprsManager.saveMyStation(myStation));
+  ipcMain.handle('aprs:beaconNow', () => aprsManager.beaconNow());
+  ipcMain.handle('aprs:sendMessage', (_e, toCallsign, text) => aprsManager.sendMessage(toCallsign, text));
+  ipcMain.handle('aprs:getMessages', () => aprsManager.getMessages());
+  ipcMain.handle('aprs:markMessageRead', (_e, id) => aprsManager.markMessageRead(id));
+  ipcMain.handle('aprs:createObject', (_e, name, opts) => aprsManager.createObject(name, opts));
+  ipcMain.handle('aprs:killObject', (_e, name) => aprsManager.killObject(name));
+  ipcMain.handle('aprs:getObjects', () => aprsManager.getObjects());
 
   createWindow();
 

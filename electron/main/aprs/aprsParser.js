@@ -43,15 +43,30 @@ function decodeCompressedPosition(latComp, lonComp, csT) {
 function parsePosition(payload) {
   const content = payload || '';
 
-  const uncompressedMatch = content.match(/[!=@/](\d{4}\.\d{2}[NS])[/\\](\d{5}\.\d{2}[EW])(.)(.)/);
+  // NOTE: an earlier version of this regex discarded the symbol-table-ID
+  // byte (the char between lat and lon) and instead grabbed the *next two*
+  // characters after longitude as "table+code" — which really meant "real
+  // code" + "first char of the comment". Found via a build/parse round-trip
+  // test. Fixed to capture the real table char (the lat/lon separator) and
+  // exactly one real code char immediately after longitude.
+  const uncompressedMatch = content.match(/[!=@/](\d{4}\.\d{2}[NS])([/\\])(\d{5}\.\d{2}[EW])(.)/);
   if (uncompressedMatch) {
-    const [, latStr, lonStr, symbolTable, symbolCode] = uncompressedMatch;
+    const [, latStr, symbolTable, lonStr, symbolCode] = uncompressedMatch;
     return { latitude: parseAPRSCoord(latStr), longitude: parseAPRSCoord(lonStr), symbol: symbolTable + symbolCode, format: 'uncompressed' };
   }
 
-  const compressedMatch = content.match(/[!=@/]([\x21-\x7B]{4})([\x21-\x7B]{4})(.)(.)([\x21-\x7B]{2})/);
+  // Same underlying bug, worse here: the symbol-table-ID byte immediately
+  // after the DTI was never captured/skipped at all, so the 4-byte
+  // latitude capture actually started one byte early — corrupting lat/lon
+  // for any genuine standalone compressed report (DTI + table-ID as two
+  // separate leading bytes). Object/Item reports' compressed position
+  // *subfield* has no separate DTI of its own (their own ';'/')' already
+  // serves that role) — parseObject() below compensates by prepending a
+  // synthetic DTI before calling this function, which is what the fixed
+  // regex now correctly expects.
+  const compressedMatch = content.match(/[!=@/](.)([\x21-\x7B]{4})([\x21-\x7B]{4})(.)([\x21-\x7B]{2})/);
   if (compressedMatch) {
-    const [, latComp, lonComp, symbolTable, symbolCode, csT] = compressedMatch;
+    const [, symbolTable, latComp, lonComp, symbolCode, csT] = compressedMatch;
     try {
       const position = decodeCompressedPosition(latComp, lonComp, csT);
       position.symbol = symbolTable + symbolCode;
@@ -219,4 +234,125 @@ function parseTnc2Line(line) {
   return { from, to, path, payload };
 }
 
-module.exports = { parseAPRSCoord, decodeCompressedPosition, parsePosition, parseWeather, decodeMicE, parseTnc2Line };
+// ---- Coordinate formatting (inverse of parseAPRSCoord) ----
+function formatAPRSCoord(decimal, isLat) {
+  const dir = isLat ? (decimal >= 0 ? 'N' : 'S') : (decimal >= 0 ? 'E' : 'W');
+  const abs = Math.abs(decimal);
+  const deg = Math.floor(abs);
+  const minutes = (abs - deg) * 60;
+  const degStr = String(deg).padStart(isLat ? 2 : 3, '0');
+  const minStr = minutes.toFixed(2).padStart(5, '0');
+  return `${degStr}${minStr}${dir}`;
+}
+
+// ---- APRS Messages (APRS101.PDF Chapter 14) ----
+// ":ADDRESSEE :text{msgid" — addressee is a FIXED 9-char, space-padded field.
+function pad9(callsign) { return (callsign || '').toUpperCase().padEnd(9, ' ').slice(0, 9); }
+
+function parseMessage(payload) {
+  const content = payload || '';
+  if (content[0] !== ':' || content.length < 11 || content[10] !== ':') return null;
+  const addressee = content.slice(1, 10).trim();
+  const rest = content.slice(11);
+  const idMatch = rest.match(/\{([A-Za-z0-9]{1,5})$/);
+  const text = idMatch ? rest.slice(0, idMatch.index) : rest;
+  const msgId = idMatch ? idMatch[1] : null;
+  const ackMatch = text.match(/^ack([A-Za-z0-9]{1,5})$/);
+  const rejMatch = text.match(/^rej([A-Za-z0-9]{1,5})$/);
+  if (ackMatch) return { addressee, text: '', msgId: ackMatch[1], isAck: true, isRej: false };
+  if (rejMatch) return { addressee, text: '', msgId: rejMatch[1], isAck: false, isRej: true };
+  return { addressee, text, msgId, isAck: false, isRej: false };
+}
+
+function buildMessagePacket({ addressee, text, msgId }) {
+  const body = (text || '').slice(0, 67);
+  return `:${pad9(addressee)}:${body}${msgId ? `{${msgId}` : ''}`;
+}
+
+function buildAckPacket({ addressee, msgId }) {
+  return `:${pad9(addressee)}:ack${msgId}`;
+}
+
+function buildRejPacket({ addressee, msgId }) {
+  return `:${pad9(addressee)}:rej${msgId}`;
+}
+
+// ---- Outgoing position report (uncompressed — simplest, universally supported) ----
+function buildPositionPacket({ lat, lon, symbol, comment }) {
+  const symbolTable = (symbol && symbol[0]) || '/';
+  const symbolCode = (symbol && symbol[1]) || '>';
+  return `!${formatAPRSCoord(lat, true)}${symbolTable}${formatAPRSCoord(lon, false)}${symbolCode}${comment || ''}`;
+}
+
+// ---- Objects/Items (APRS101.PDF Chapter 11) ----
+// ";NAMEVVVVV*DDHHMMzLAT/LONsymbolcomment" — name is a FIXED 9-char field,
+// '*'=live/'_'=killed, timestamp is mandatory (DDHHMM + a zulu/local/hour
+// indicator char — we always transmit 'z' for zulu/UTC).
+function formatDHMz(date) {
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  const h = String(date.getUTCHours()).padStart(2, '0');
+  const m = String(date.getUTCMinutes()).padStart(2, '0');
+  return `${d}${h}${m}z`;
+}
+
+function parseObject(payload) {
+  const content = payload || '';
+  if (content[0] !== ';' || content.length < 18) return null;
+  const name = content.slice(1, 10).trim();
+  const liveChar = content[10];
+  if (liveChar !== '*' && liveChar !== '_') return null;
+  const killed = liveChar === '_';
+  const rest = content.slice(11); // timestamp(7) + position report
+  const timestamp = rest.slice(0, 7);
+  const positionPart = rest.slice(7);
+  const position = parsePosition(`!${positionPart}`); // reuse the standard position parser
+  if (!position) return null;
+  return { name, killed, timestamp, ...position };
+}
+
+function buildObjectPacket({ name, lat, lon, symbol, comment, killed = false }) {
+  const symbolTable = (symbol && symbol[0]) || '/';
+  const symbolCode = (symbol && symbol[1]) || '>';
+  const nameField = (name || '').padEnd(9, ' ').slice(0, 9);
+  const liveChar = killed ? '_' : '*';
+  const ts = formatDHMz(new Date());
+  return `;${nameField}${liveChar}${ts}${formatAPRSCoord(lat, true)}${symbolTable}${formatAPRSCoord(lon, false)}${symbolCode}${comment || ''}`;
+}
+
+// ---- Telemetry (APRS101.PDF Chapter 13) ----
+// "T#seq,a1,a2,a3,a4,a5,bbbbbbbb" — analog values 000-255, digital as 8 literal 0/1 chars.
+function parseTelemetry(payload) {
+  const content = payload || '';
+  const match = content.match(/^T#(MIC|\d{3}),?(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),([01]{8})/);
+  if (!match) return null;
+  const [, seq, a1, a2, a3, a4, a5, digitalStr] = match;
+  return {
+    type: 'telemetry',
+    seq,
+    analog: [a1, a2, a3, a4, a5].map(Number),
+    digital: digitalStr.split('').map(Number)
+  };
+}
+
+// Telemetry channel metadata arrives as regular APRS messages (see
+// parseMessage) with a PARM./UNIT./EQNS. prefix instead of free text —
+// call this on a message's `text` field, not as a separate wire format.
+function parseTelemetryMetadata(messageText) {
+  const text = messageText || '';
+  const m = text.match(/^(PARM|UNIT|EQNS|BITS)\.(.*)$/);
+  if (!m) return null;
+  const [, kind, rest] = m;
+  if (kind === 'EQNS') {
+    const nums = rest.split(',').map(Number);
+    const groups = [];
+    for (let i = 0; i < nums.length; i += 3) groups.push(nums.slice(i, i + 3));
+    return { kind: 'EQNS', values: groups };
+  }
+  return { kind, values: rest.split(',') };
+}
+
+module.exports = {
+  parseAPRSCoord, decodeCompressedPosition, parsePosition, parseWeather, decodeMicE, parseTnc2Line,
+  formatAPRSCoord, parseMessage, buildMessagePacket, buildAckPacket, buildRejPacket, buildPositionPacket,
+  parseObject, buildObjectPacket, parseTelemetry, parseTelemetryMetadata
+};

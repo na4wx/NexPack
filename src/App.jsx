@@ -65,7 +65,7 @@ export default function App() {
         {page === 'tncs' && <TncManagerPage tncs={tncs} onChange={refresh} />}
         {page === 'winlink' && <MailWorkspace />}
         {page === 'chat' && <ChatWorkspace />}
-        {page === 'aprs' && <AprsWorkspace />}
+        {page === 'aprs' && <AprsWorkspace tncs={tncs} />}
       </Box>
     </Box>
   );
