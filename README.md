@@ -58,3 +58,10 @@ Uses `electron-builder`; output lands in `release/`.
 `build:win` needs Wine to cross-build on macOS/Linux, and Wine's `rcedit` step is currently broken on Apple Silicon hosts (a documented Wine/host-page-size incompatibility, not fixable by retrying) — build the MSI from an actual Windows machine, or from CI on a `windows-latest` runner.
 
 `build:linux` cross-builds cleanly from macOS via Docker (`electronuserland/builder:wine`), but must run against a native Linux filesystem (a Docker volume), not a bind-mounted macOS directory — node-gyp's native module rebuild fails over the bind mount.
+
+## Credits
+
+- **[pat](https://github.com/la5nta/pat)** by Martin Hebnes Pedersen (LA5NTA) and contributors — the Winlink B2F client that powers the Winlink section. Licensed GPL-3.0; NexPack bundles it as an unmodified subprocess and drives it entirely through its local HTTP API (mere aggregation, per GPL-3.0 §5) — NexPack's own code stays MIT. See pat's own [LICENSE](https://github.com/la5nta/pat/blob/master/LICENSE).
+- **[Leaflet](https://leafletjs.com/)** (BSD-2-Clause) — the mapping library behind the APRS map.
+- **[OpenStreetMap](https://www.openstreetmap.org/copyright)** contributors — map tile data shown on the APRS map, © OpenStreetMap contributors, ODbL.
+- **[NexDigi](https://github.com/na4wx/NexDigi)** — the digipeater server this app is a companion to.
