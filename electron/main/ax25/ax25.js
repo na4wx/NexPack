@@ -137,10 +137,11 @@ function formatCallsign(callsign, ssid) {
 
 module.exports = { parseAx25Frame, parseAddressField, formatCallsign, serviceAddressInBuffer, _callsignBase };
  
-// Build a minimal AX.25 frame (destination, source, optional path none) with given control/pid/payload
+// Build an AX.25 frame (destination, source, optional digipeater path) with given control/pid/payload
 // control: 0x2F SABM, 0x63 UA, 0x43 DISC, 0x0F DM, 0x03 UI, 0x00 I (Ns=0/Nr=0)
+// path: optional array of digipeater tokens, e.g. ['WIDE1-1', 'WIDE2-1'] (max 8 per AX.25 spec)
 function buildAx25Frame(opts) {
-  const { dest, src, control = 0x03, pid = 0xF0, payload, commandType } = opts || {};
+  const { dest, src, control = 0x03, pid = 0xF0, payload, commandType, path } = opts || {};
   if (!dest || !src) throw new Error('buildAx25Frame requires dest and src');
   const parseCall = (call) => {
     const m = String(call || '').toUpperCase().match(/^([A-Z0-9]{1,6})(?:-(\d+))?$/);
@@ -161,16 +162,28 @@ function buildAx25Frame(opts) {
     destAddr[6] = destAddr[6] & ~0x80;     // clear in dest
     srcAddr[6] = srcAddr[6] | 0x80;        // set in src
   }
-  // mark EA on last address (source)
-  srcAddr[6] = srcAddr[6] | 0x01;
+  const pathTokens = (path || []).filter(Boolean).slice(0, 8);
+  const pathAddrs = pathTokens.map((token) => {
+    const p = parseCall(token);
+    // H-bit (0x80) stays 0 — we're originating the frame, none of these digis have repeated it yet.
+    return formatCallsign(p.base, p.ssid);
+  });
+  // EA bit marks the LAST address in the whole chain: a path entry if present, else source.
+  if (pathAddrs.length > 0) {
+    srcAddr[6] = srcAddr[6] & ~0x01;
+    pathAddrs[pathAddrs.length - 1][6] = pathAddrs[pathAddrs.length - 1][6] | 0x01;
+  } else {
+    srcAddr[6] = srcAddr[6] | 0x01;
+  }
   const controlBuf = Buffer.from([control & 0xFF]);
   const payloadBuf = Buffer.isBuffer(payload) ? payload : Buffer.from(payload || '');
+  const addrBufs = [destAddr, srcAddr, ...pathAddrs];
   // PID is present for UI and I frames; allow omission for U/S frames by passing pid === null
   if (pid === null || pid === undefined) {
-    return Buffer.concat([destAddr, srcAddr, controlBuf, payloadBuf]);
+    return Buffer.concat([...addrBufs, controlBuf, payloadBuf]);
   }
   const pidBuf = Buffer.from([pid & 0xFF]);
-  return Buffer.concat([destAddr, srcAddr, controlBuf, pidBuf, payloadBuf]);
+  return Buffer.concat([...addrBufs, controlBuf, pidBuf, payloadBuf]);
 }
 
 module.exports.buildAx25Frame = buildAx25Frame;

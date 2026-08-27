@@ -16,15 +16,34 @@ contextBridge.exposeInMainWorld('nexdigi', {
   removeRadio: (tncId, radioId) => ipcRenderer.invoke('radio:remove', tncId, radioId),
 
   sendUnproto: (tncId, radioId, dest, text) => ipcRenderer.invoke('terminal:sendUnproto', tncId, radioId, dest, text),
-  startSession: (tncId, radioId, remoteCall) => ipcRenderer.invoke('terminal:startSession', tncId, radioId, remoteCall),
+  startSession: (tncId, radioId, remoteCall, digiPath, scriptId) => ipcRenderer.invoke('terminal:startSession', tncId, radioId, remoteCall, digiPath, scriptId),
   sendSessionText: (sessionId, text) => ipcRenderer.invoke('terminal:sendSessionText', sessionId, text),
   endSession: (sessionId) => ipcRenderer.invoke('terminal:endSession', sessionId),
+
+  pickFileToSend: () => ipcRenderer.invoke('terminal:pickFileToSend'),
+  pickSaveLocation: (suggestedName) => ipcRenderer.invoke('terminal:pickSaveLocation', suggestedName),
+  sendFile: (sessionId, filePath) => ipcRenderer.invoke('terminal:sendFile', sessionId, filePath),
+  respondFileOffer: (sessionId, accept, savePath) => ipcRenderer.invoke('terminal:respondFileOffer', sessionId, accept, savePath),
+  abortFileTransfer: (sessionId) => ipcRenderer.invoke('terminal:abortFileTransfer', sessionId),
+
+  listScripts: () => ipcRenderer.invoke('scripts:list'),
+  saveScript: (script) => ipcRenderer.invoke('scripts:save', script),
+  deleteScript: (scriptId) => ipcRenderer.invoke('scripts:delete', scriptId),
+  runScript: (sessionId, scriptId) => ipcRenderer.invoke('scripts:run', sessionId, scriptId),
+  abortScript: (sessionId) => ipcRenderer.invoke('scripts:abort', sessionId),
 
   onMonitor: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('monitor', l); return () => ipcRenderer.removeListener('monitor', l); },
   onTncStatus: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('tnc-status', l); return () => ipcRenderer.removeListener('tnc-status', l); },
   onTncListChanged: (cb) => { const l = () => cb(); ipcRenderer.on('tnc-list-changed', l); return () => ipcRenderer.removeListener('tnc-list-changed', l); },
   onSessionState: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-state', l); return () => ipcRenderer.removeListener('session-state', l); },
   onSessionData: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-data', l); return () => ipcRenderer.removeListener('session-data', l); },
+  onSessionTx: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-tx', l); return () => ipcRenderer.removeListener('session-tx', l); },
+  onFileTransferOffer: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('file-transfer-offer', l); return () => ipcRenderer.removeListener('file-transfer-offer', l); },
+  onFileTransferProgress: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('file-transfer-progress', l); return () => ipcRenderer.removeListener('file-transfer-progress', l); },
+  onFileTransferComplete: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('file-transfer-complete', l); return () => ipcRenderer.removeListener('file-transfer-complete', l); },
+  onFileTransferError: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('file-transfer-error', l); return () => ipcRenderer.removeListener('file-transfer-error', l); },
+  onScriptComplete: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('script-complete', l); return () => ipcRenderer.removeListener('script-complete', l); },
+  onScriptError: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('script-error', l); return () => ipcRenderer.removeListener('script-error', l); },
 
   // Winlink (bundled pat subprocess)
   winlinkGetSettings: () => ipcRenderer.invoke('winlink:getSettings'),

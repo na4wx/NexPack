@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const TncManager = require('./tnc/TncManager');
+const ScriptManager = require('./tnc/ScriptManager');
 const PatManager = require('./winlink/PatManager');
 const NexDigiClient = require('./bbs/NexDigiClient');
 const ChatManager = require('./chat/ChatManager');
@@ -8,6 +9,7 @@ const AprsManager = require('./aprs/AprsManager');
 
 let mainWindow;
 let tncManager;
+let scriptManager;
 let patManager;
 let nexDigiClient;
 let chatManager;
@@ -40,7 +42,8 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  tncManager = new TncManager({ configPath: path.join(app.getPath('userData'), 'tncs.json') });
+  tncManager = new TncManager({ configPath: path.join(app.getPath('userData'), 'tncs.json'), userDataDir: app.getPath('userData') });
+  scriptManager = new ScriptManager({ userDataDir: app.getPath('userData'), tncManager });
   patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
   nexDigiClient = new NexDigiClient({ userDataDir: app.getPath('userData') });
   chatManager = new ChatManager({ nexDigiClient });
@@ -62,6 +65,13 @@ app.whenReady().then(() => {
   forwardToRenderer('tnc-list-changed');
   forwardToRenderer('session-state');
   forwardToRenderer('session-data');
+  forwardToRenderer('session-tx');
+  forwardToRenderer('file-transfer-offer');
+  forwardToRenderer('file-transfer-progress');
+  forwardToRenderer('file-transfer-complete');
+  forwardToRenderer('file-transfer-error');
+  forwardToRenderer('script-complete');
+  forwardToRenderer('script-error');
 
   ipcMain.handle('serial:list', async () => {
     try {
@@ -84,9 +94,27 @@ app.whenReady().then(() => {
   ipcMain.handle('radio:remove', (_e, tncId, radioId) => tncManager.removeRadio(tncId, radioId));
 
   ipcMain.handle('terminal:sendUnproto', (_e, tncId, radioId, dest, text) => tncManager.sendUnproto(tncId, radioId, dest, text));
-  ipcMain.handle('terminal:startSession', (_e, tncId, radioId, remoteCall) => tncManager.startSession(tncId, radioId, remoteCall));
+  ipcMain.handle('terminal:startSession', (_e, tncId, radioId, remoteCall, digiPath, scriptId) => tncManager.startSession(tncId, radioId, remoteCall, digiPath, scriptId));
   ipcMain.handle('terminal:sendSessionText', (_e, sessionId, text) => tncManager.sendSessionText(sessionId, text));
   ipcMain.handle('terminal:endSession', (_e, sessionId) => tncManager.endSession(sessionId));
+
+  ipcMain.handle('terminal:pickFileToSend', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'] });
+    return result.canceled ? null : result.filePaths[0];
+  });
+  ipcMain.handle('terminal:pickSaveLocation', async (_e, suggestedName) => {
+    const result = await dialog.showSaveDialog(mainWindow, { defaultPath: suggestedName });
+    return result.canceled ? null : result.filePath;
+  });
+  ipcMain.handle('terminal:sendFile', (_e, sessionId, filePath) => tncManager.startFileSend(sessionId, filePath));
+  ipcMain.handle('terminal:respondFileOffer', (_e, sessionId, accept, savePath) => tncManager.respondToFileOffer(sessionId, accept, savePath));
+  ipcMain.handle('terminal:abortFileTransfer', (_e, sessionId) => tncManager.abortFileTransfer(sessionId));
+
+  ipcMain.handle('scripts:list', () => scriptManager.listScripts());
+  ipcMain.handle('scripts:save', (_e, script) => scriptManager.saveScript(script));
+  ipcMain.handle('scripts:delete', (_e, scriptId) => scriptManager.deleteScript(scriptId));
+  ipcMain.handle('scripts:run', (_e, sessionId, scriptId) => scriptManager.runScript(sessionId, scriptId));
+  ipcMain.handle('scripts:abort', (_e, sessionId) => scriptManager.abortScript(sessionId));
 
   // Winlink (via bundled pat subprocess)
   ipcMain.handle('winlink:getSettings', () => patManager.getSettings());

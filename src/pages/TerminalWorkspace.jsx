@@ -3,13 +3,20 @@ import { Box, Stack, Tabs, Tab, IconButton, TextField, MenuItem, Button, Typogra
 import CloseIcon from '@mui/icons-material/Close';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CallMadeIcon from '@mui/icons-material/CallMade';
+import CodeIcon from '@mui/icons-material/Code';
 import MonitorPane from '../components/MonitorPane';
 import SessionPane from '../components/SessionPane';
+import ScriptEditorDialog from '../components/ScriptEditorDialog';
 
 const MAX_MONITOR_EVENTS = 3000;
+const MAX_PATH_HOPS = 8;
 
 function radioLabel(tnc, radio) {
   return `${radio.callsign} · ${tnc.name}`;
+}
+
+function parsePathInput(str) {
+  return str.split(',').map((s) => s.trim()).filter(Boolean).slice(0, MAX_PATH_HOPS);
 }
 
 export default function TerminalWorkspace({ tncs }) {
@@ -20,6 +27,12 @@ export default function TerminalWorkspace({ tncs }) {
   const [transcripts, setTranscripts] = useState({}); // sessionId -> [{dir,text}]
   const [selectedRadioKey, setSelectedRadioKey] = useState('');
   const [connectCall, setConnectCall] = useState('');
+  const [connectPath, setConnectPath] = useState('');
+  const [connectScriptId, setConnectScriptId] = useState('');
+  const [scripts, setScripts] = useState([]);
+  const [scriptEditorOpen, setScriptEditorOpen] = useState(false);
+  const [fileOffers, setFileOffers] = useState({}); // sessionId -> {filename, totalBytes}
+  const [transferProgress, setTransferProgress] = useState({}); // sessionId -> progress
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
 
@@ -29,7 +42,10 @@ export default function TerminalWorkspace({ tncs }) {
     return list;
   }, [tncs]);
 
+  const loadScripts = () => window.nexdigi.listScripts().then(setScripts);
+
   useEffect(() => {
+    loadScripts();
     const offMonitor = window.nexdigi.onMonitor((evt) => {
       setMonitorEvents((prev) => {
         const next = prev.length >= MAX_MONITOR_EVENTS ? prev.slice(prev.length - MAX_MONITOR_EVENTS + 1) : prev.slice();
@@ -47,7 +63,26 @@ export default function TerminalWorkspace({ tncs }) {
     const offData = window.nexdigi.onSessionData(({ sessionId, text }) => {
       setTranscripts((prev) => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { dir: 'rx', text }] }));
     });
-    return () => { offMonitor(); offState(); offData(); };
+    const offTx = window.nexdigi.onSessionTx(({ sessionId, text }) => {
+      setTranscripts((prev) => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { dir: 'tx', text }] }));
+    });
+    const offOffer = window.nexdigi.onFileTransferOffer((evt) => {
+      setFileOffers((prev) => ({ ...prev, [evt.sessionId]: evt }));
+    });
+    const offProgress = window.nexdigi.onFileTransferProgress((evt) => {
+      setTransferProgress((prev) => ({ ...prev, [evt.sessionId]: evt }));
+    });
+    const offComplete = window.nexdigi.onFileTransferComplete((evt) => {
+      setFileOffers((prev) => { const next = { ...prev }; delete next[evt.sessionId]; return next; });
+      setTransferProgress((prev) => { const next = { ...prev }; delete next[evt.sessionId]; return next; });
+      setTranscripts((prev) => ({ ...prev, [evt.sessionId]: [...(prev[evt.sessionId] || []), { dir: 'rx', text: `[file transfer complete: ${evt.filename}]` }] }));
+    });
+    const offError = window.nexdigi.onFileTransferError((evt) => {
+      setFileOffers((prev) => { const next = { ...prev }; delete next[evt.sessionId]; return next; });
+      setTransferProgress((prev) => { const next = { ...prev }; delete next[evt.sessionId]; return next; });
+      setTranscripts((prev) => ({ ...prev, [evt.sessionId]: [...(prev[evt.sessionId] || []), { dir: 'rx', text: `[file transfer failed: ${evt.message}]` }] }));
+    });
+    return () => { offMonitor(); offState(); offData(); offTx(); offOffer(); offProgress(); offComplete(); offError(); };
   }, []);
 
   const openMonitorTab = (radioKey) => {
@@ -61,7 +96,8 @@ export default function TerminalWorkspace({ tncs }) {
   const openSession = async () => {
     const r = radios.find((x) => x.key === selectedRadioKey);
     if (!r || !connectCall.trim()) return;
-    const snap = await window.nexdigi.startSession(r.tncId, r.radioId, connectCall.trim().toUpperCase());
+    const path = parsePathInput(connectPath);
+    const snap = await window.nexdigi.startSession(r.tncId, r.radioId, connectCall.trim().toUpperCase(), path, connectScriptId || undefined);
     setSessions((prev) => ({ ...prev, [snap.id]: snap }));
     const key = `session:${snap.id}`;
     setTabs((prev) => [...prev, { key, kind: 'session', label: snap.remoteCall, sessionId: snap.id }]);
@@ -74,18 +110,40 @@ export default function TerminalWorkspace({ tncs }) {
     if (activeTab === key) setActiveTab('all');
   };
 
-  const sendSessionText = (sessionId, text) => {
-    window.nexdigi.sendSessionText(sessionId, text);
-    setTranscripts((prev) => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { dir: 'tx', text }] }));
-  };
+  // The 'session-tx' event (below) appends to the transcript for every
+  // send regardless of source (user-typed, scripted, etc.) — no local
+  // append needed here.
+  const sendSessionText = (sessionId, text) => window.nexdigi.sendSessionText(sessionId, text);
 
   const disconnectSession = (sessionId) => window.nexdigi.endSession(sessionId);
+
+  const sendFile = async (sessionId) => {
+    const filePath = await window.nexdigi.pickFileToSend();
+    if (!filePath) return;
+    await window.nexdigi.sendFile(sessionId, filePath);
+  };
+
+  const respondFileOffer = async (sessionId, accept) => {
+    const offer = fileOffers[sessionId];
+    if (accept) {
+      const savePath = await window.nexdigi.pickSaveLocation(offer && offer.filename);
+      if (!savePath) return; // user cancelled the save dialog — leave the offer pending
+      await window.nexdigi.respondFileOffer(sessionId, true, savePath);
+    } else {
+      await window.nexdigi.respondFileOffer(sessionId, false);
+      setFileOffers((prev) => { const next = { ...prev }; delete next[sessionId]; return next; });
+    }
+  };
+
+  const runScript = async (sessionId, scriptId) => {
+    await window.nexdigi.runScript(sessionId, scriptId);
+  };
 
   const active = tabs.find((t) => t.key === activeTab) || tabs[0];
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 1.5, borderBottom: 1, borderColor: 'divider', flexWrap: 'wrap', rowGap: 1 }}>
         <TextField
           select size="small" label="Radio" value={selectedRadioKey}
           onChange={(e) => setSelectedRadioKey(e.target.value)}
@@ -101,8 +159,21 @@ export default function TerminalWorkspace({ tncs }) {
           size="small" label="Connect to callsign" value={connectCall}
           onChange={(e) => setConnectCall(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') openSession(); }}
-          sx={{ width: 200 }}
+          sx={{ width: 180 }}
         />
+        <TextField
+          size="small" label="Path (optional)" value={connectPath}
+          onChange={(e) => setConnectPath(e.target.value)}
+          placeholder="WIDE1-1,WIDE2-1"
+          sx={{ width: 180 }}
+        />
+        <TextField select size="small" label="Script" value={connectScriptId} onChange={(e) => setConnectScriptId(e.target.value)} sx={{ minWidth: 140 }}>
+          <MenuItem value="">None</MenuItem>
+          {scripts.map((s) => <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>)}
+        </TextField>
+        <IconButton size="small" onClick={() => setScriptEditorOpen(true)} title="Manage scripts">
+          <CodeIcon fontSize="small" />
+        </IconButton>
         <Button size="small" variant="contained" startIcon={<CallMadeIcon />} disabled={!selectedRadioKey || !connectCall.trim()} onClick={openSession}>
           Connect
         </Button>
@@ -146,9 +217,18 @@ export default function TerminalWorkspace({ tncs }) {
             transcript={transcripts[active.sessionId] || []}
             onSend={(text) => sendSessionText(active.sessionId, text)}
             onDisconnect={() => disconnectSession(active.sessionId)}
+            onSendFile={() => sendFile(active.sessionId)}
+            fileOffer={fileOffers[active.sessionId]}
+            onRespondOffer={(accept) => respondFileOffer(active.sessionId, accept)}
+            transferProgress={transferProgress[active.sessionId]}
+            onAbortTransfer={() => window.nexdigi.abortFileTransfer(active.sessionId)}
+            scripts={scripts}
+            onRunScript={(scriptId) => runScript(active.sessionId, scriptId)}
           />
         )}
       </Box>
+
+      <ScriptEditorDialog open={scriptEditorOpen} onClose={() => setScriptEditorOpen(false)} onChanged={loadScripts} />
     </Box>
   );
 }

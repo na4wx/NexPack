@@ -1,11 +1,14 @@
 const EventEmitter = require('events');
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const { parseAx25Frame, buildAx25Frame } = require('../ax25/ax25');
 const { escapeFrame, unescapeStream } = require('../ax25/kiss');
 const SerialKissAdapter = require('../adapters/SerialKissAdapter');
 const KissTcpAdapter = require('../adapters/KissTcpAdapter');
 const AgwpeAdapter = require('../adapters/AgwpeAdapter');
+const SessionLogger = require('./SessionLogger');
+const { YappSender, YappReceiver } = require('./yapp');
 
 const CTL = {
   UI: 0x03,
@@ -40,11 +43,12 @@ function id() { return crypto.randomUUID(); }
 // NexDigi has no equivalent of (its channelManager.js is a flat
 // channel->adapter map with no TNC/radio hierarchy) — deliberately new.
 class TncManager extends EventEmitter {
-  constructor({ configPath } = {}) {
+  constructor({ configPath, userDataDir } = {}) {
     super();
     this.configPath = configPath;
     this.tncs = new Map(); // id -> { config: {id,name,type,connection,radios:[]}, adapter, status, rxBuffer }
     this.sessions = new Map(); // sessionId -> session state
+    this.sessionLogger = userDataDir ? new SessionLogger({ userDataDir }) : null;
     this._load();
   }
 
@@ -232,22 +236,35 @@ class TncManager extends EventEmitter {
       session.state = 'connected';
       session.vr = 0; session.vs = 0;
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: CTL.UA_F, pid: null, payload: Buffer.alloc(0) }));
+      if (this.sessionLogger) this.sessionLogger.startLog(session);
       this.emit('session-state', this._sessionSnapshot(session));
     } else if (frameType === 'ua' && session && session.state === 'connecting') {
       session.state = 'connected';
+      if (this.sessionLogger) this.sessionLogger.startLog(session);
       this.emit('session-state', this._sessionSnapshot(session));
     } else if (frameType === 'disc' && session) {
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: CTL.UA_F, pid: null, payload: Buffer.alloc(0) }));
       session.state = 'disconnected';
+      if (session.yapp) { try { session.yapp.abort(); } catch (e) { /* ignore */ } }
+      if (this.sessionLogger) this.sessionLogger.stopLog(session);
       this.emit('session-state', this._sessionSnapshot(session));
       this.sessions.delete(sessionKey);
     } else if (frameType === 'iframe' && session && session.state === 'connected') {
       const ns = (parsed.control >> 1) & 0x07;
       session.vr = (ns + 1) % 8;
-      let text = '';
-      try { text = parsed.payload.toString('utf8'); } catch (e) { /* ignore */ }
-      session.buffer.push(text);
-      this.emit('session-data', { sessionId: session.id, text });
+      const looksLikeYappInit = session.mode === 'text' && parsed.payload.length >= 2 && parsed.payload[0] === 0x05 && parsed.payload[1] === 0x01;
+      if (session.mode === 'yapp' && session.yapp) {
+        session.yapp.onBytes(parsed.payload);
+      } else if (looksLikeYappInit) {
+        const receiver = this._beginIncomingOffer(session);
+        receiver.onBytes(parsed.payload);
+      } else {
+        let text = '';
+        try { text = parsed.payload.toString('utf8'); } catch (e) { /* ignore */ }
+        session.buffer.push(text);
+        if (this.sessionLogger) this.sessionLogger.appendLog(session, 'rx', text);
+        this.emit('session-data', { sessionId: session.id, text });
+      }
       const rrControl = ((session.vr & 0x07) << 5) | 0x01;
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: rrControl, pid: null, payload: Buffer.alloc(0) }));
     }
@@ -265,51 +282,151 @@ class TncManager extends EventEmitter {
   }
 
   // ---- outbound: connected-mode sessions ----
-  _newSession(t, radio, remoteCall, sessionKey) {
-    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, state: 'connecting', vs: 0, vr: 0, buffer: [] };
+  _newSession(t, radio, remoteCall, sessionKey, digiPath, scriptId) {
+    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, path: digiPath || [], state: 'connecting', vs: 0, vr: 0, buffer: [], mode: 'text', yapp: null, pendingScriptId: scriptId || null, logPath: null };
     this.sessions.set(sessionKey, session);
     return session;
   }
 
   _sessionSnapshot(s) {
-    return { id: s.id, tncId: s.tncId, radioId: s.radioId, remoteCall: s.remoteCall, state: s.state };
+    return { id: s.id, tncId: s.tncId, radioId: s.radioId, remoteCall: s.remoteCall, path: s.path, state: s.state, mode: s.mode, logPath: s.logPath, pendingScriptId: s.pendingScriptId };
   }
 
-  startSession(tncId, radioId, remoteCall) {
+  _findSession(sessionId) {
+    return Array.from(this.sessions.values()).find((s) => s.id === sessionId);
+  }
+
+  startSession(tncId, radioId, remoteCall, digiPath, scriptId) {
     const t = this.tncs.get(tncId);
     const radio = t && t.config.radios.find((r) => r.id === radioId);
     if (!t || !radio) throw new Error('unknown TNC/radio');
     const sessionKey = `${tncId}:${radioId}:${remoteCall}`;
-    const session = this._newSession(t, radio, remoteCall, sessionKey);
-    const frame = buildAx25Frame({ dest: remoteCall, src: radio.callsign, control: CTL.SABM_P, pid: null, payload: Buffer.alloc(0) });
+    const session = this._newSession(t, radio, remoteCall, sessionKey, digiPath, scriptId);
+    const frame = buildAx25Frame({ dest: remoteCall, src: radio.callsign, control: CTL.SABM_P, pid: null, payload: Buffer.alloc(0), path: session.path });
     this._txAx25Frame(t, radio, frame);
     this._emitMonitor(t, radio, 'tx', 'sabm', { addresses: [{ callsign: remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.SABM_P, payload: Buffer.alloc(0) }, frame);
     return this._sessionSnapshot(session);
   }
 
   sendSessionText(sessionId, text) {
-    const session = Array.from(this.sessions.values()).find((s) => s.id === sessionId);
+    const session = this._findSession(sessionId);
     if (!session || session.state !== 'connected') throw new Error('session not connected');
+    if (session.mode === 'yapp') throw new Error('session is busy with a file transfer');
     const t = this.tncs.get(session.tncId);
     const radio = t.config.radios.find((r) => r.id === session.radioId);
     const control = ((session.vr & 0x07) << 5) | ((session.vs & 0x07) << 1);
     session.vs = (session.vs + 1) % 8;
     const payload = Buffer.from(text, 'utf8');
-    const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control, pid: 0xf0, payload });
+    const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control, pid: 0xf0, payload, path: session.path });
     this._txAx25Frame(t, radio, frame);
+    if (this.sessionLogger) this.sessionLogger.appendLog(session, 'tx', text);
+    this.emit('session-tx', { sessionId: session.id, text });
     this._emitMonitor(t, radio, 'tx', 'iframe', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control, payload }, frame);
   }
 
+  // Raw-byte variant of sendSessionText, used internally by YAPP file transfer.
+  sendSessionRaw(sessionId, buffer) {
+    const session = this._findSession(sessionId);
+    if (!session || session.state !== 'connected') throw new Error('session not connected');
+    const t = this.tncs.get(session.tncId);
+    const radio = t.config.radios.find((r) => r.id === session.radioId);
+    const control = ((session.vr & 0x07) << 5) | ((session.vs & 0x07) << 1);
+    session.vs = (session.vs + 1) % 8;
+    const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control, pid: 0xf0, payload: buffer, path: session.path });
+    this._txAx25Frame(t, radio, frame);
+    this._emitMonitor(t, radio, 'tx', 'iframe', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control, payload: buffer }, frame);
+  }
+
   endSession(sessionId) {
-    const session = Array.from(this.sessions.values()).find((s) => s.id === sessionId);
+    const session = this._findSession(sessionId);
     if (!session) return;
     const t = this.tncs.get(session.tncId);
     const radio = t.config.radios.find((r) => r.id === session.radioId);
-    const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: CTL.DISC_P, pid: null, payload: Buffer.alloc(0) });
+    const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: CTL.DISC_P, pid: null, payload: Buffer.alloc(0), path: session.path });
     this._txAx25Frame(t, radio, frame);
+    this._emitMonitor(t, radio, 'tx', 'disc', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.DISC_P, payload: Buffer.alloc(0) }, frame);
     session.state = 'disconnected';
+    if (session.yapp) { try { session.yapp.abort(); } catch (e) { /* ignore */ } }
+    if (this.sessionLogger) this.sessionLogger.stopLog(session);
     this.emit('session-state', this._sessionSnapshot(session));
     this.sessions.delete(session.key);
+  }
+
+  // ---- YAPP file transfer ----
+  startFileSend(sessionId, filePath) {
+    const session = this._findSession(sessionId);
+    if (!session || session.state !== 'connected') throw new Error('session not connected');
+    if (session.mode === 'yapp') throw new Error('a file transfer is already in progress on this session');
+    const data = fs.readFileSync(filePath);
+    const filename = path.basename(filePath);
+    session.mode = 'yapp';
+    const sender = new YappSender({
+      sendRawFn: (buf) => this.sendSessionRaw(sessionId, buf),
+      filename,
+      data,
+      onProgress: (p) => this.emit('file-transfer-progress', { sessionId, direction: 'send', filename, ...p }),
+      onComplete: () => {
+        session.mode = 'text'; session.yapp = null;
+        if (this.sessionLogger) this.sessionLogger.appendNote(session, `sent file ${filename} (${data.length} bytes)`);
+        this.emit('file-transfer-complete', { sessionId, direction: 'send', filename });
+      },
+      onError: (e) => {
+        session.mode = 'text'; session.yapp = null;
+        this.emit('file-transfer-error', { sessionId, direction: 'send', filename, message: e.message });
+      }
+    });
+    session.yapp = sender;
+    sender.start();
+  }
+
+  // Called on receipt of an unsolicited YAPP init while a session is idle in text mode.
+  _beginIncomingOffer(session) {
+    session.mode = 'yapp';
+    const receiver = new YappReceiver({
+      sendRawFn: (buf) => this.sendSessionRaw(session.id, buf),
+      onOffer: ({ filename, totalBytes }) => this.emit('file-transfer-offer', { sessionId: session.id, filename, totalBytes }),
+      onProgress: (p) => this.emit('file-transfer-progress', { sessionId: session.id, direction: 'receive', filename: receiver.filename, ...p }),
+      onComplete: (data) => {
+        const savePath = session._savePathForOffer;
+        session._savePathForOffer = null;
+        session.mode = 'text';
+        session.yapp = null;
+        try {
+          if (savePath) fs.writeFileSync(savePath, data);
+          if (this.sessionLogger) this.sessionLogger.appendNote(session, `received file ${receiver.filename} (${data.length} bytes)${savePath ? ` -> ${savePath}` : ''}`);
+          this.emit('file-transfer-complete', { sessionId: session.id, direction: 'receive', filename: receiver.filename, savePath });
+        } catch (e) {
+          this.emit('file-transfer-error', { sessionId: session.id, direction: 'receive', filename: receiver.filename, message: e.message });
+        }
+      },
+      onError: (e) => {
+        session.mode = 'text'; session.yapp = null;
+        this.emit('file-transfer-error', { sessionId: session.id, direction: 'receive', message: e.message });
+      }
+    });
+    session.yapp = receiver;
+    return receiver;
+  }
+
+  respondToFileOffer(sessionId, accept, savePath) {
+    const session = this._findSession(sessionId);
+    if (!session || !session.yapp) throw new Error('no file offer pending on this session');
+    if (accept) {
+      session._savePathForOffer = savePath;
+      session.yapp.accept();
+    } else {
+      session.yapp.reject();
+      session.mode = 'text';
+      session.yapp = null;
+    }
+  }
+
+  abortFileTransfer(sessionId) {
+    const session = this._findSession(sessionId);
+    if (!session || !session.yapp) return;
+    session.yapp.abort();
+    session.mode = 'text';
+    session.yapp = null;
   }
 
   shutdown() {
