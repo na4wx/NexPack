@@ -63,7 +63,7 @@ export default function App() {
       <Box sx={{ flexGrow: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
         {page === 'terminal' && <TerminalWorkspace tncs={tncs} />}
         {page === 'tncs' && <TncManagerPage tncs={tncs} onChange={refresh} />}
-        {page === 'winlink' && <MailWorkspace />}
+        {page === 'winlink' && <MailWorkspace tncs={tncs} />}
         {page === 'chat' && <ChatWorkspace />}
         {page === 'aprs' && <AprsWorkspace tncs={tncs} />}
       </Box>

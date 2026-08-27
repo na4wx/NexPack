@@ -30,12 +30,25 @@ class NexDigiClient {
   async _request(method, urlPath, { json } = {}) {
     const s = this.getSettings();
     if (!s || !s.host) throw new Error('NexDigi server not configured');
-    const res = await fetch(`${this._baseUrl()}${urlPath}`, {
-      method,
-      headers: { 'X-UI-Password': s.password || '', ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-      body: json !== undefined ? JSON.stringify(json) : undefined
-    });
+    let res;
+    try {
+      res = await fetch(`${this._baseUrl()}${urlPath}`, {
+        method,
+        headers: { 'X-UI-Password': s.password || '', ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+        body: json !== undefined ? JSON.stringify(json) : undefined
+      });
+    } catch (e) {
+      // Node's fetch throws a bare "TypeError: fetch failed" with the real
+      // cause nested in e.cause — surface something a user can act on
+      // instead of that opaque wrapper text.
+      const code = e.cause && e.cause.code;
+      if (code === 'ECONNREFUSED') throw new Error(`Can't reach NexDigi server at ${s.host} — connection refused. Is the server running?`);
+      if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') throw new Error(`Can't reach NexDigi server at ${s.host} — host not found. Check the address in BBS settings.`);
+      if (code === 'ETIMEDOUT' || e.name === 'TimeoutError') throw new Error(`Can't reach NexDigi server at ${s.host} — connection timed out.`);
+      throw new Error(`Can't reach NexDigi server at ${s.host}: ${(e.cause && e.cause.message) || e.message}`);
+    }
     const text = await res.text();
+    if (res.status === 401 || res.status === 403) throw new Error('NexDigi server rejected the password — check BBS settings.');
     if (!res.ok) throw new Error(`NexDigi ${method} ${urlPath} -> ${res.status}: ${text}`);
     try { return text ? JSON.parse(text) : null; } catch (e) { return text; }
   }

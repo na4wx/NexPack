@@ -74,6 +74,10 @@ contextBridge.exposeInMainWorld('nexdigi', {
   bbsDeleteMessage: (messageNumber) => ipcRenderer.invoke('bbs:deleteMessage', messageNumber),
   bbsListBulletins: () => ipcRenderer.invoke('bbs:listBulletins'),
   bbsGetStats: () => ipcRenderer.invoke('bbs:getStats'),
+  bbsGetTransport: () => ipcRenderer.invoke('bbsFacade:getTransport'),
+  bbsSetTransport: (transport) => ipcRenderer.invoke('bbsFacade:setTransport', transport),
+  rfBbsGetSettings: () => ipcRenderer.invoke('rfBbs:getSettings'),
+  rfBbsSaveSettings: (settings) => ipcRenderer.invoke('rfBbs:saveSettings', settings),
 
   // Chat (NexDigi server REST + shared WebSocket)
   chatConnect: () => ipcRenderer.invoke('chat:connect'),

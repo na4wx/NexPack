@@ -3,7 +3,7 @@ import { Box, Tabs, Tab } from '@mui/material';
 import WinlinkMail from './WinlinkMail';
 import BbsMail from './BbsMail';
 
-export default function MailWorkspace() {
+export default function MailWorkspace({ tncs }) {
   const [tab, setTab] = useState('winlink');
 
   return (
@@ -14,7 +14,7 @@ export default function MailWorkspace() {
       </Tabs>
       <Box sx={{ flexGrow: 1, minHeight: 0 }}>
         {tab === 'winlink' && <WinlinkMail />}
-        {tab === 'bbs' && <BbsMail />}
+        {tab === 'bbs' && <BbsMail tncs={tncs} />}
       </Box>
     </Box>
   );

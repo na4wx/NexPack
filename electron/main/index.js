@@ -4,6 +4,8 @@ const TncManager = require('./tnc/TncManager');
 const ScriptManager = require('./tnc/ScriptManager');
 const PatManager = require('./winlink/PatManager');
 const NexDigiClient = require('./bbs/NexDigiClient');
+const RfBbsClient = require('./bbs/RfBbsClient');
+const BbsFacade = require('./bbs/BbsFacade');
 const ChatManager = require('./chat/ChatManager');
 const AprsManager = require('./aprs/AprsManager');
 
@@ -12,6 +14,8 @@ let tncManager;
 let scriptManager;
 let patManager;
 let nexDigiClient;
+let rfBbsClient;
+let bbsFacade;
 let chatManager;
 let aprsManager;
 
@@ -46,6 +50,8 @@ app.whenReady().then(() => {
   scriptManager = new ScriptManager({ userDataDir: app.getPath('userData'), tncManager });
   patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
   nexDigiClient = new NexDigiClient({ userDataDir: app.getPath('userData') });
+  rfBbsClient = new RfBbsClient({ userDataDir: app.getPath('userData'), tncManager });
+  bbsFacade = new BbsFacade({ userDataDir: app.getPath('userData'), nexDigiClient, rfBbsClient });
   chatManager = new ChatManager({ nexDigiClient });
   aprsManager = new AprsManager({ userDataDir: app.getPath('userData'), tncManager });
 
@@ -134,15 +140,19 @@ app.whenReady().then(() => {
   ipcMain.handle('winlink:disconnect', (_e, dirty) => patManager.disconnect(dirty));
   ipcMain.handle('winlink:searchRms', (_e, params) => patManager.searchRms(params));
 
-  // BBS (via NexDigi server REST)
+  // BBS (via NexDigi server REST, or over RF — routed by BbsFacade based on the active transport)
   ipcMain.handle('bbs:getSettings', () => nexDigiClient.getSettings());
   ipcMain.handle('bbs:saveSettings', (_e, settings) => nexDigiClient.saveSettings(settings));
-  ipcMain.handle('bbs:listMessages', (_e, filters) => nexDigiClient.listMessages(filters));
-  ipcMain.handle('bbs:postMessage', (_e, message) => nexDigiClient.postMessage(message));
-  ipcMain.handle('bbs:markRead', (_e, messageNumber) => nexDigiClient.markRead(messageNumber));
-  ipcMain.handle('bbs:deleteMessage', (_e, messageNumber) => nexDigiClient.deleteMessage(messageNumber));
-  ipcMain.handle('bbs:listBulletins', () => nexDigiClient.listBulletins());
-  ipcMain.handle('bbs:getStats', () => nexDigiClient.getStats());
+  ipcMain.handle('bbs:listMessages', (_e, filters) => bbsFacade.listMessages(filters));
+  ipcMain.handle('bbs:postMessage', (_e, message) => bbsFacade.postMessage(message));
+  ipcMain.handle('bbs:markRead', (_e, messageNumber) => bbsFacade.markRead(messageNumber));
+  ipcMain.handle('bbs:deleteMessage', (_e, messageNumber) => bbsFacade.deleteMessage(messageNumber));
+  ipcMain.handle('bbs:listBulletins', () => bbsFacade.listBulletins());
+  ipcMain.handle('bbs:getStats', () => bbsFacade.getStats());
+  ipcMain.handle('bbsFacade:getTransport', () => bbsFacade.getTransport());
+  ipcMain.handle('bbsFacade:setTransport', (_e, transport) => bbsFacade.setTransport(transport));
+  ipcMain.handle('rfBbs:getSettings', () => rfBbsClient.getSettings());
+  ipcMain.handle('rfBbs:saveSettings', (_e, settings) => rfBbsClient.saveSettings(settings));
 
   // Chat (via NexDigi server REST + shared WebSocket)
   ipcMain.handle('chat:connect', () => chatManager.connect());
