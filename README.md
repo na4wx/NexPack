@@ -1,6 +1,8 @@
 # NexPack
 
-A standalone desktop companion app for [NexDigi](https://github.com/na4wx/NexDigi) — multi-TNC/multi-radio packet terminal, Winlink + BBS mail, Chat, and a full APRS client.
+**A next-generation packet radio, Winlink, and APRS client for the desktop.**
+
+A standalone companion app for [NexDigi](https://github.com/na4wx/NexDigi), covering multi-TNC/multi-radio packet terminal, Winlink + BBS mail, real-time chat, and a full APRS client in one place.
 
 Built with Electron + React + MUI. All TNC/radio I/O (serial, KISS-TCP, AGWPE) runs in the Electron main process; the renderer talks to it over IPC only.
 
