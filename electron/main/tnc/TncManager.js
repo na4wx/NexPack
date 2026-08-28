@@ -18,6 +18,14 @@ const CTL = {
   DM: 0x0f, DM_F: 0x1f
 };
 
+// A real AX.25 connect must retry the SABM if no UA comes back — a remote
+// that's out of range, busy, or slow to respond is the normal case on RF,
+// not an error. Every real TNC/AX.25 stack does this (paKet relies on the
+// TNC's own firmware for it); NexPack implements the AX.25 layer itself,
+// so this has to live here.
+const SABM_RETRY_COUNT = 5;
+const SABM_RETRY_MS = 6000;
+
 function classifyControl(control) {
   const isSABM = control === CTL.SABM || control === CTL.SABM_P || control === 0x6f;
   const isUA = (control & ~0x10) === CTL.UA;
@@ -43,12 +51,15 @@ function id() { return crypto.randomUUID(); }
 // NexDigi has no equivalent of (its channelManager.js is a flat
 // channel->adapter map with no TNC/radio hierarchy) — deliberately new.
 class TncManager extends EventEmitter {
-  constructor({ configPath, userDataDir } = {}) {
+  constructor({ configPath, userDataDir, sabmRetryMs, sabmRetryCount } = {}) {
     super();
     this.configPath = configPath;
     this.tncs = new Map(); // id -> { config: {id,name,type,connection,radios:[]}, adapter, status, rxBuffer }
     this.sessions = new Map(); // sessionId -> session state
     this.sessionLogger = userDataDir ? new SessionLogger({ userDataDir }) : null;
+    // Overridable only for tests, which can't afford the real ~36s worst case.
+    this.sabmRetryMs = sabmRetryMs || SABM_RETRY_MS;
+    this.sabmRetryCount = sabmRetryCount !== undefined ? sabmRetryCount : SABM_RETRY_COUNT;
     this._load();
   }
 
@@ -239,11 +250,13 @@ class TncManager extends EventEmitter {
       if (this.sessionLogger) this.sessionLogger.startLog(session);
       this.emit('session-state', this._sessionSnapshot(session));
     } else if (frameType === 'ua' && session && session.state === 'connecting') {
+      this._clearSabmRetry(session);
       session.state = 'connected';
       if (this.sessionLogger) this.sessionLogger.startLog(session);
       this.emit('session-state', this._sessionSnapshot(session));
     } else if (frameType === 'disc' && session) {
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: CTL.UA_F, pid: null, payload: Buffer.alloc(0) }));
+      this._clearSabmRetry(session);
       session.state = 'disconnected';
       if (session.yapp) { try { session.yapp.abort(); } catch (e) { /* ignore */ } }
       if (this.sessionLogger) this.sessionLogger.stopLog(session);
@@ -283,9 +296,35 @@ class TncManager extends EventEmitter {
 
   // ---- outbound: connected-mode sessions ----
   _newSession(t, radio, remoteCall, sessionKey, digiPath, scriptId) {
-    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, path: digiPath || [], state: 'connecting', vs: 0, vr: 0, buffer: [], mode: 'text', yapp: null, pendingScriptId: scriptId || null, logPath: null };
+    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, path: digiPath || [], state: 'connecting', vs: 0, vr: 0, buffer: [], mode: 'text', yapp: null, pendingScriptId: scriptId || null, logPath: null, retries: 0, retryTimer: null };
     this.sessions.set(sessionKey, session);
     return session;
+  }
+
+  _clearSabmRetry(session) {
+    if (session.retryTimer) { clearTimeout(session.retryTimer); session.retryTimer = null; }
+  }
+
+  // Resends the SABM on a timer until a UA arrives, the session is torn
+  // down, or SABM_RETRY_COUNT is exhausted — at which point the session is
+  // marked disconnected and a session-error event fires so the UI can show
+  // a real "no response" message instead of hanging in 'connecting' forever.
+  _armSabmRetry(t, radio, session) {
+    session.retryTimer = setTimeout(() => {
+      if (!this.sessions.has(session.key) || session.state !== 'connecting') return;
+      if (session.retries >= this.sabmRetryCount) {
+        session.state = 'disconnected';
+        this.sessions.delete(session.key);
+        this.emit('session-state', this._sessionSnapshot(session));
+        this.emit('session-error', { sessionId: session.id, remoteCall: session.remoteCall, message: `No response from ${session.remoteCall} after ${this.sabmRetryCount + 1} attempts.` });
+        return;
+      }
+      session.retries += 1;
+      const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: CTL.SABM_P, pid: null, payload: Buffer.alloc(0), path: session.path });
+      this._txAx25Frame(t, radio, frame);
+      this._emitMonitor(t, radio, 'tx', 'sabm', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.SABM_P, payload: Buffer.alloc(0) }, frame);
+      this._armSabmRetry(t, radio, session);
+    }, this.sabmRetryMs);
   }
 
   _sessionSnapshot(s) {
@@ -305,6 +344,7 @@ class TncManager extends EventEmitter {
     const frame = buildAx25Frame({ dest: remoteCall, src: radio.callsign, control: CTL.SABM_P, pid: null, payload: Buffer.alloc(0), path: session.path });
     this._txAx25Frame(t, radio, frame);
     this._emitMonitor(t, radio, 'tx', 'sabm', { addresses: [{ callsign: remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.SABM_P, payload: Buffer.alloc(0) }, frame);
+    this._armSabmRetry(t, radio, session);
     return this._sessionSnapshot(session);
   }
 
@@ -345,6 +385,7 @@ class TncManager extends EventEmitter {
     const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: CTL.DISC_P, pid: null, payload: Buffer.alloc(0), path: session.path });
     this._txAx25Frame(t, radio, frame);
     this._emitMonitor(t, radio, 'tx', 'disc', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.DISC_P, payload: Buffer.alloc(0) }, frame);
+    this._clearSabmRetry(session);
     session.state = 'disconnected';
     if (session.yapp) { try { session.yapp.abort(); } catch (e) { /* ignore */ } }
     if (this.sessionLogger) this.sessionLogger.stopLog(session);
@@ -430,6 +471,7 @@ class TncManager extends EventEmitter {
   }
 
   shutdown() {
+    for (const session of this.sessions.values()) this._clearSabmRetry(session);
     for (const tncId of this.tncs.keys()) this.disconnectTnc(tncId);
   }
 }

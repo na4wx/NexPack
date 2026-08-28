@@ -8,6 +8,7 @@ const files = [
   'test_terminal_serial.js',
   'test_terminal_agwpe.js',
   'test_terminal_digipath.js',
+  'test_terminal_sabm_retry.js',
   'test_terminal_logging.js',
   'test_terminal_yapp.js',
   'test_terminal_scripts.js',

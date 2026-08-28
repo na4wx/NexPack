@@ -82,7 +82,10 @@ export default function TerminalWorkspace({ tncs }) {
       setTransferProgress((prev) => { const next = { ...prev }; delete next[evt.sessionId]; return next; });
       setTranscripts((prev) => ({ ...prev, [evt.sessionId]: [...(prev[evt.sessionId] || []), { dir: 'rx', text: `[file transfer failed: ${evt.message}]` }] }));
     });
-    return () => { offMonitor(); offState(); offData(); offTx(); offOffer(); offProgress(); offComplete(); offError(); };
+    const offSessionError = window.nexdigi.onSessionError((evt) => {
+      setTranscripts((prev) => ({ ...prev, [evt.sessionId]: [...(prev[evt.sessionId] || []), { dir: 'rx', text: `[${evt.message}]` }] }));
+    });
+    return () => { offMonitor(); offState(); offData(); offTx(); offOffer(); offProgress(); offComplete(); offError(); offSessionError(); };
   }, []);
 
   const openMonitorTab = (radioKey) => {

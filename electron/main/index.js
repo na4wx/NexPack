@@ -72,6 +72,7 @@ app.whenReady().then(() => {
   forwardToRenderer('session-state');
   forwardToRenderer('session-data');
   forwardToRenderer('session-tx');
+  forwardToRenderer('session-error');
   forwardToRenderer('file-transfer-offer');
   forwardToRenderer('file-transfer-progress');
   forwardToRenderer('file-transfer-complete');

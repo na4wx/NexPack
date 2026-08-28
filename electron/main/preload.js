@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('nexdigi', {
   onSessionState: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-state', l); return () => ipcRenderer.removeListener('session-state', l); },
   onSessionData: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-data', l); return () => ipcRenderer.removeListener('session-data', l); },
   onSessionTx: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-tx', l); return () => ipcRenderer.removeListener('session-tx', l); },
+  onSessionError: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('session-error', l); return () => ipcRenderer.removeListener('session-error', l); },
   onFileTransferOffer: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('file-transfer-offer', l); return () => ipcRenderer.removeListener('file-transfer-offer', l); },
   onFileTransferProgress: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('file-transfer-progress', l); return () => ipcRenderer.removeListener('file-transfer-progress', l); },
   onFileTransferComplete: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('file-transfer-complete', l); return () => ipcRenderer.removeListener('file-transfer-complete', l); },
