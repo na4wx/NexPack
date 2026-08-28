@@ -339,6 +339,7 @@ class TncManager extends EventEmitter {
     const t = this.tncs.get(tncId);
     const radio = t && t.config.radios.find((r) => r.id === radioId);
     if (!t || !radio) throw new Error('unknown TNC/radio');
+    if (!t.adapter) throw new Error(`TNC "${t.config.name || tncId}" is not connected — connect it before starting a session.`);
     const sessionKey = `${tncId}:${radioId}:${remoteCall}`;
     const session = this._newSession(t, radio, remoteCall, sessionKey, digiPath, scriptId);
     const frame = buildAx25Frame({ dest: remoteCall, src: radio.callsign, control: CTL.SABM_P, pid: null, payload: Buffer.alloc(0), path: session.path });
