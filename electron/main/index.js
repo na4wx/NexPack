@@ -55,8 +55,18 @@ app.whenReady().then(() => {
   chatManager = new ChatManager({ nexDigiClient });
   aprsManager = new AprsManager({ userDataDir: app.getPath('userData'), tncManager });
 
+  // TncManager only emits its own 'error' (as opposed to per-adapter errors,
+  // which it already absorbs itself) when persisting tncs.json fails — rare,
+  // but with no listener at all Node throws and takes down the whole app,
+  // the same crash class just fixed for PatManager above.
+  tncManager.on('error', (err) => console.error('TncManager error:', err));
+
   patManager.on('log', (line) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', line); });
   patManager.on('status', (status) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-status', status); });
+  // Without this listener, PatManager emitting 'error' (e.g. a spawn
+  // failure well after start() has already resolved) would crash the
+  // entire Electron process — Node throws when 'error' has no listeners.
+  patManager.on('error', (err) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', `ERROR: ${err.message}\n`); });
 
   for (const evt of ['chat-event', 'chat-error', 'chat-socket-closed']) {
     chatManager.on(evt, (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(evt, payload); });

@@ -171,9 +171,40 @@ class PatManager extends EventEmitter {
     this.proc.stdout.on('data', (d) => this.emit('log', d.toString()));
     this.proc.stderr.on('data', (d) => this.emit('log', d.toString()));
     this.proc.on('exit', (code) => { this.emit('exit', code); this.proc = null; this._removePidFile(); this._closeSocket(); });
-    this.proc.on('error', (err) => this.emit('error', err));
 
-    await this._waitForHttp();
+    // A spawn failure (missing binary, no permission, etc.) fires this
+    // 'error' event asynchronously, AFTER spawn() has already returned —
+    // it can't be caught with a try/catch around spawn() itself. Node also
+    // throws (crashing the whole Electron process) if 'error' is ever
+    // emitted with zero listeners. While a start() call is in flight, that
+    // failure is already fully surfaced via the rejected promise below —
+    // re-emitting it as PatManager's own 'error' too would crash the
+    // process independent of whether the promise path works, regardless of
+    // whether anything happens to be listening. Only re-emit for a genuine
+    // *post-startup* failure (pat crashing unexpectedly once already
+    // running), which nothing else surfaces.
+    let spawnError = null;
+    let starting = true;
+    this.proc.on('error', (err) => {
+      spawnError = err;
+      this.proc = null;
+      this._removePidFile();
+      if (!starting) this.emit('error', err);
+    });
+
+    try {
+      await this._waitForHttp();
+    } catch (e) {
+      if (spawnError) {
+        const friendly = spawnError.code === 'ENOENT'
+          ? `Can't find the pat program at "${bin}" — it needs to be installed and on your PATH (or bundled with this NexPack build).`
+          : `pat failed to start: ${spawnError.message}`;
+        throw new Error(friendly);
+      }
+      throw e;
+    } finally {
+      starting = false;
+    }
     this._connectSocket();
   }
 
