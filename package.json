@@ -54,6 +54,7 @@
       "package.json"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "msi",
@@ -68,12 +69,14 @@
       "perMachine": false
     },
     "mac": {
+      "icon": "build/icon.icns",
       "target": [
         "dmg"
       ],
       "category": "public.app-category.utilities"
     },
     "linux": {
+      "icon": "build/icon.png",
       "target": [
         "deb"
       ],
