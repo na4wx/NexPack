@@ -152,6 +152,174 @@ async function main() {
     peer.server.close();
   });
 
+  // --- 4: the modulo-8 window caps outstanding frames instead of blowing
+  // through it — a burst of sends (e.g. YAPP's chunk loop) must queue past
+  // the window and only release more once acks arrive ---
+  port += 1;
+  await test('a burst of sends respects the outstanding-frame window instead of overrunning it', async () => {
+    const receivedNs = [];
+    const peer = await startFakePeer(port, (ax25) => {
+      if ((ax25.control & 0x01) === 0) receivedNs.push((ax25.control >> 1) & 0x07); // never acked yet
+    });
+    const { mgrA, sessionId } = await connectA(port, { iframeRetryMs: 100000, iframeRetryCount: 5, maxOutstandingIframes: 3 });
+
+    for (let i = 0; i < 8; i++) mgrA.sendSessionText(sessionId, `line${i}`);
+    await wait(150);
+    assert.deepStrictEqual(receivedNs, [0, 1, 2], `only the first 3 (the window) should have gone out, got N(S) list: ${JSON.stringify(receivedNs)}`);
+
+    // Ack frames 0 and 1 (N(R)=2) — exactly 2 slots should open up.
+    const rrControl = (2 << 5) | 0x01; // RR, N(R)=2
+    peer.send(buildAx25Frame({ dest: OUR_CALL, src: PEER_CALL, control: rrControl, pid: null, payload: Buffer.alloc(0) }));
+    await wait(150);
+    assert.deepStrictEqual(receivedNs, [0, 1, 2, 3, 4], `acking 2 frames should release exactly 2 more from the queue, got: ${JSON.stringify(receivedNs)}`);
+
+    mgrA.shutdown();
+    peer.server.close();
+  });
+
+  // --- 5: RNR ("I'm busy") pauses sending until the peer clears it ---
+  port += 1;
+  await test('RNR pauses outbound frames until the peer sends RR/REJ again', async () => {
+    const receivedIframes = [];
+    const peer = await startFakePeer(port, (ax25) => {
+      if ((ax25.control & 0x01) === 0) receivedIframes.push(ax25.payload.toString('utf8'));
+    });
+    const { mgrA, sessionId } = await connectA(port, { iframeRetryMs: 120, iframeRetryCount: 5 });
+
+    mgrA.sendSessionText(sessionId, 'first');
+    await wait(80);
+    assert.deepStrictEqual(receivedIframes, ['first']);
+
+    const rnrControl = (0 << 5) | (2 << 2) | 0x01; // RNR, N(R)=0
+    peer.send(buildAx25Frame({ dest: OUR_CALL, src: PEER_CALL, control: rnrControl, pid: null, payload: Buffer.alloc(0) }));
+    await wait(300); // well past iframeRetryMs — a non-RNR-aware sender would have retransmitted by now
+    assert.deepStrictEqual(receivedIframes, ['first'], 'no retransmission should happen while the peer is RNR-busy');
+
+    const rrControl = (0 << 5) | 0x01; // RR, N(R)=0 — "never mind, still expecting frame 0"
+    peer.send(buildAx25Frame({ dest: OUR_CALL, src: PEER_CALL, control: rrControl, pid: null, payload: Buffer.alloc(0) }));
+    await wait(200);
+    assert.deepStrictEqual(receivedIframes, ['first', 'first'], 'clearing RNR should let the retry logic resume and retransmit the still-unacked frame');
+
+    mgrA.shutdown();
+    peer.server.close();
+  });
+
+  // --- 6: DM in reply to our SABM is a definitive refusal, not silence to
+  // retry blindly for the full ~30s worst case ---
+  port += 1;
+  await test('DM in reply to SABM is reported as a clear refusal, not a generic timeout', async () => {
+    const peer = await startFakePeer(port, () => {}); // never actually used — SABM handling below is custom
+    // Override the peer's SABM auto-UA behavior for this one test: reject instead.
+    peer.server.removeAllListeners('connection');
+
+    const mgrA = new TncManager({ sabmRetryMs: 100000, sabmRetryCount: 5 });
+    const tncA = mgrA.createTnc({ name: 'A', type: 'kiss-tcp', connection: { host: '127.0.0.1', port } });
+    const radioA = mgrA.addRadio(tncA.id, { callsign: OUR_CALL, portNumber: 0 });
+
+    const net2 = require('net');
+    const server2 = net2.createServer((sock) => {
+      let buf = Buffer.alloc(0);
+      sock.on('data', (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        const start = buf.indexOf(0xc0);
+        const end = buf.indexOf(0xc0, start + 1);
+        if (start === -1 || end === -1) return;
+        const dm = buildAx25Frame({ dest: OUR_CALL, src: PEER_CALL, control: 0x1f, pid: null, payload: Buffer.alloc(0) }); // DM, F=1
+        sock.write(escapeFrame(dm, 0));
+      });
+    });
+    peer.server.close();
+    await new Promise((res) => server2.listen(port, '127.0.0.1', res));
+
+    const errors = [];
+    mgrA.on('session-error', (e) => errors.push(e));
+    mgrA.connectTnc(tncA.id);
+    await wait(150);
+    mgrA.startSession(tncA.id, radioA.id, PEER_CALL);
+    await wait(200);
+
+    assert.strictEqual(errors.length, 1, `expected exactly one session-error from the DM refusal, got: ${JSON.stringify(errors)}`);
+    assert.ok(/refused/i.test(errors[0].message), `expected a "refused" message, got: ${errors[0].message}`);
+    assert.strictEqual(mgrA.sessions.size, 0, 'the refused session should not linger');
+
+    mgrA.shutdown();
+    server2.close();
+  });
+
+  // --- 7: DM while connected means the peer reset without a proper DISC —
+  // we should notice and clean up, not sit "connected" forever ---
+  port += 1;
+  await test('an unexpected DM while connected tears the session down', async () => {
+    const peer = await startFakePeer(port, () => {});
+    const { mgrA, sessionId } = await connectA(port);
+
+    const states = [];
+    mgrA.on('session-state', (s) => { if (s.id === sessionId) states.push(s.state); });
+
+    const dm = buildAx25Frame({ dest: OUR_CALL, src: PEER_CALL, control: 0x0f, pid: null, payload: Buffer.alloc(0) });
+    peer.send(dm);
+    await wait(150);
+
+    assert.ok(states.includes('disconnected'), `expected the session to transition to disconnected after an unexpected DM, got states: ${JSON.stringify(states)}`);
+    assert.strictEqual(mgrA.sessions.size, 0);
+
+    mgrA.shutdown();
+    peer.server.close();
+  });
+
+  // --- 8: an idle connected session polls the peer itself (T3), and gives
+  // up if the peer never answers — not just silence forever ---
+  port += 1;
+  await test('an idle session polls the peer (T3) and reports lost contact if it never answers', async () => {
+    const polls = [];
+    const peer = await startFakePeer(port, (ax25) => {
+      const isSupervisory = (ax25.control & 0x03) === 0x01;
+      const pf = (ax25.control & 0x10) !== 0;
+      if (isSupervisory && pf) polls.push(ax25); // never answered, on purpose
+    });
+    const { mgrA, sessionId } = await connectA(port, { t3IdleMs: 100, t3MissedPollLimit: 2 });
+
+    const errors = [];
+    mgrA.on('session-error', (e) => errors.push(e));
+
+    await wait(100 * 5 + 200); // several T3 intervals
+    assert.ok(polls.length >= 3, `expected multiple idle polls, got ${polls.length}`);
+    assert.strictEqual(errors.length, 1, `expected exactly one "lost contact" error, got: ${JSON.stringify(errors)}`);
+    assert.ok(/lost contact/i.test(errors[0].message));
+    assert.strictEqual(mgrA.sessions.size, 0);
+
+    mgrA.shutdown();
+    peer.server.close();
+  });
+
+  // --- 9: a TNC disconnected out from under a live session (adapter goes
+  // null) must not crash the process from inside a retry timer ---
+  port += 1;
+  await test('a TNC disconnected mid-session is handled cleanly by retry timers, not a crash', async () => {
+    let crashed = null;
+    const onUncaught = (err) => { crashed = err; };
+    process.on('uncaughtException', onUncaught);
+
+    const peer = await startFakePeer(port, () => {}); // never acks anything
+    const { mgrA, sessionId } = await connectA(port, { iframeRetryMs: 100, iframeRetryCount: 2 });
+
+    mgrA.sendSessionText(sessionId, 'orphaned');
+    await wait(30);
+    const tncA = Array.from(mgrA.tncs.keys())[0];
+    mgrA.disconnectTnc(tncA); // adapter goes null while a frame is still outstanding
+
+    const errors = [];
+    mgrA.on('session-error', (e) => errors.push(e));
+    await wait(300); // past the retry interval — this is where the old code would crash
+
+    process.removeListener('uncaughtException', onUncaught);
+    assert.ok(!crashed, `the process should not have crashed, but it did: ${crashed && crashed.stack}`);
+    assert.ok(errors.some((e) => /disconnected/i.test(e.message)), `expected a clear "disconnected" session-error, got: ${JSON.stringify(errors)}`);
+
+    mgrA.shutdown();
+    peer.server.close();
+  });
+
   console.log(`\nTests passed: ${pass}`);
   console.log(`Tests failed: ${fail}`);
   process.exit(fail > 0 ? 1 : 0);

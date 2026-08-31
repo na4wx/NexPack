@@ -47,6 +47,23 @@ const SABM_RETRY_MS = 6000;
 const IFRAME_RETRY_COUNT = 5;
 const IFRAME_RETRY_MS = 10000;
 
+// Modulo-8 sequencing only has room for 7 unacked frames before N(S) wraps
+// and collides with an old one; real stacks cap outstanding frames well
+// below that (4 is the common default "k" window). Without this, anything
+// that sends several frames back-to-back (a pasted multi-line paste, a
+// script, and especially YAPP file transfer's chunk loop) blows straight
+// through the window on any link slower than the local send rate — which
+// is most real RF — corrupting or stalling the transfer.
+const MAX_OUTSTANDING_IFRAMES = 4;
+
+// T3: if a connected session has been completely silent (nothing sent or
+// received) for this long, poll the peer ourselves rather than just sitting
+// there — otherwise a peer that silently vanished (powered off, out of
+// range) leaves the session showing "connected" forever with nothing to
+// ever notice the difference.
+const T3_IDLE_MS = 5 * 60 * 1000;
+const T3_MISSED_POLL_LIMIT = 3;
+
 function classifyControl(control) {
   const isSABM = control === CTL.SABM || control === CTL.SABM_P || control === 0x6f;
   const isUA = (control & ~0x10) === CTL.UA;
@@ -72,17 +89,20 @@ function id() { return crypto.randomUUID(); }
 // NexDigi has no equivalent of (its channelManager.js is a flat
 // channel->adapter map with no TNC/radio hierarchy) — deliberately new.
 class TncManager extends EventEmitter {
-  constructor({ configPath, userDataDir, sabmRetryMs, sabmRetryCount, iframeRetryMs, iframeRetryCount } = {}) {
+  constructor({ configPath, userDataDir, sabmRetryMs, sabmRetryCount, iframeRetryMs, iframeRetryCount, maxOutstandingIframes, t3IdleMs, t3MissedPollLimit } = {}) {
     super();
     this.configPath = configPath;
     this.tncs = new Map(); // id -> { config: {id,name,type,connection,radios:[]}, adapter, status, rxBuffer }
     this.sessions = new Map(); // sessionId -> session state
     this.sessionLogger = userDataDir ? new SessionLogger({ userDataDir }) : null;
-    // Overridable only for tests, which can't afford the real ~36s worst case.
+    // Overridable only for tests, which can't afford the real worst-case timing.
     this.sabmRetryMs = sabmRetryMs || SABM_RETRY_MS;
     this.sabmRetryCount = sabmRetryCount !== undefined ? sabmRetryCount : SABM_RETRY_COUNT;
     this.iframeRetryMs = iframeRetryMs || IFRAME_RETRY_MS;
     this.iframeRetryCount = iframeRetryCount !== undefined ? iframeRetryCount : IFRAME_RETRY_COUNT;
+    this.maxOutstandingIframes = maxOutstandingIframes || MAX_OUTSTANDING_IFRAMES;
+    this.t3IdleMs = t3IdleMs || T3_IDLE_MS;
+    this.t3MissedPollLimit = t3MissedPollLimit !== undefined ? t3MissedPollLimit : T3_MISSED_POLL_LIMIT;
     this._load();
   }
 
@@ -221,12 +241,21 @@ class TncManager extends EventEmitter {
     if (t.rxBuffer.length > 8192) t.rxBuffer = Buffer.alloc(0); // safety valve against garbage streams
   }
 
+  // Returns false (instead of throwing) if the TNC's adapter is gone — e.g.
+  // it was disconnected while a session was still live. Retry timers run on
+  // their own schedule with nothing to catch a throw, so a plain crash here
+  // would take down the whole app (the exact class of bug already fixed
+  // once today for a null adapter reached via a different path); every
+  // caller either already checked t.adapter itself (and can treat false as
+  // "shouldn't happen") or is a retry loop that needs to back off cleanly.
   _txAx25Frame(t, radio, ax25Frame) {
+    if (!t.adapter) return false;
     if (t.config.type === 'agwpe') {
       t.adapter.sendFrame(radio ? radio.portNumber || 0 : 0, ax25Frame, { callFrom: radio && radio.callsign });
     } else {
       t.adapter.send(escapeFrame(ax25Frame, radio ? radio.portNumber || 0 : 0));
     }
+    return true;
   }
 
   _emitMonitor(t, radio, direction, frameType, parsed, raw) {
@@ -272,25 +301,33 @@ class TncManager extends EventEmitter {
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: CTL.UA_F, pid: null, payload: Buffer.alloc(0) }));
       if (this.sessionLogger) this.sessionLogger.startLog(session);
       this.emit('session-state', this._sessionSnapshot(session));
+      session.t3MissedPolls = 0;
+      this._armT3(t, radio, session);
     } else if (frameType === 'ua' && session && session.state === 'connecting') {
       this._clearSabmRetry(session);
       session.state = 'connected';
       if (this.sessionLogger) this.sessionLogger.startLog(session);
       this.emit('session-state', this._sessionSnapshot(session));
+      session.t3MissedPolls = 0;
+      this._armT3(t, radio, session);
     } else if (frameType === 'disc' && session) {
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: CTL.UA_F, pid: null, payload: Buffer.alloc(0) }));
-      this._clearSabmRetry(session);
-      this._clearIframeRetry(session);
-      session.state = 'disconnected';
-      if (session.yapp) { try { session.yapp.abort(); } catch (e) { /* ignore */ } }
-      if (this.sessionLogger) this.sessionLogger.stopLog(session);
-      this.emit('session-state', this._sessionSnapshot(session));
-      this.sessions.delete(sessionKey);
+      this._teardownConnected(session);
+    } else if (frameType === 'dm' && session && session.state === 'connecting') {
+      // The remote explicitly refused the connection (e.g. "not accepting
+      // connects" or a busy port) — no point blindly retrying the SABM for
+      // up to ~30s when it already told us no.
+      this._giveUp(session, `Connection refused by ${session.remoteCall}.`);
+    } else if (frameType === 'dm' && session && session.state === 'connected') {
+      // The remote's own stack reset/forgot us without a proper DISC (e.g.
+      // its TNC rebooted) — nothing to reply to, just stop pretending we're
+      // still connected on our end too.
+      this._teardownConnected(session);
     } else if (frameType === 'iframe' && session && session.state === 'connected') {
       const ns = (parsed.control >> 1) & 0x07;
       const incomingPf = (parsed.control & 0x10) !== 0;
       const nr = (parsed.control >> 5) & 0x07;
-      this._ackFrames(session, nr);
+      this._ackFrames(t, radio, session, nr);
       // Real-world peers aren't always perfectly sequenced (e.g. a stale
       // duplicate resend, or a peer whose own N(S) bookkeeping briefly
       // slips) — rejecting or dropping their data on a mismatch risks
@@ -314,14 +351,26 @@ class TncManager extends EventEmitter {
       }
       const rrControl = buildSupervisoryControl(S_TYPE.RR, session.vr, incomingPf);
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: rrControl, pid: null, payload: Buffer.alloc(0) }));
+      session.t3MissedPolls = 0;
+      this._armT3(t, radio, session);
     } else if (frameType === 'supervisory' && session && session.state === 'connected') {
       const { sType, pf, nr } = parseSupervisory(parsed.control);
-      this._ackFrames(session, nr);
-      if (sType === S_TYPE.REJ) {
-        // The peer is telling us it's expecting N(S)=nr next — everything we
-        // sent from there on was either lost or arrived out of sequence and
-        // got discarded, so it has to go back out exactly as before.
-        this._retransmitOutstanding(t, radio, session);
+      this._ackFrames(t, radio, session, nr);
+      if (sType === S_TYPE.RNR) {
+        // "Stop sending, I'm busy" — pause outbound I-frames (queued or
+        // retried) until an RR/REJ says the peer is ready again, instead of
+        // hammering a receiver that just told us not to.
+        session.peerBusy = true;
+      } else {
+        if (session.peerBusy) { session.peerBusy = false; this._pumpSendQueue(t, radio, session); }
+        if (sType === S_TYPE.REJ) {
+          // The peer is telling us it's expecting N(S)=nr next — everything
+          // we sent from there on was either lost or arrived out of
+          // sequence and got discarded, so it has to go back out exactly
+          // as before.
+          const ok = this._retransmitOutstanding(t, radio, session);
+          if (!ok) { this._giveUp(session, `TNC disconnected while talking to ${session.remoteCall}.`); return; }
+        }
       }
       if (pf) {
         // A poll (P bit) demands an immediate response reporting our state,
@@ -332,23 +381,85 @@ class TncManager extends EventEmitter {
         this._txAx25Frame(t, radio, respFrame);
         this._emitMonitor(t, radio, 'tx', 'rr', { addresses: [{ callsign: srcCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: respControl, payload: Buffer.alloc(0) }, respFrame);
       }
+      session.t3MissedPolls = 0;
+      this._armT3(t, radio, session);
+    } else if ((frameType === 'iframe' || frameType === 'supervisory') && (!session || session.state !== 'connected')) {
+      // Data or session control addressed to us for a connection we don't
+      // have (never had one, or it's still mid-handshake) — the compliant
+      // reply is DM, not silence, so a well-behaved peer knows to stop
+      // rather than keep talking into the void.
+      const frame = buildAx25Frame({ dest: srcCall, src: radio.callsign, control: CTL.DM_F, pid: null, payload: Buffer.alloc(0) });
+      this._txAx25Frame(t, radio, frame);
+      this._emitMonitor(t, radio, 'tx', 'dm', { addresses: [{ callsign: srcCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.DM_F, payload: Buffer.alloc(0) }, frame);
+    } else if (frameType === 'unknown' && session) {
+      // A control byte we don't recognize at all, on a connection we do
+      // have — tell the peer plainly (FRMR) rather than silently ignoring
+      // it forever, which is what a stricter real station would do to us.
+      const info = Buffer.from([parsed.control & 0xff, ((session.vr & 0x07) << 5) | (session.vs & 0x07), 0x01]);
+      const frame = buildAx25Frame({ dest: srcCall, src: radio.callsign, control: 0x87, pid: null, payload: info, path: session.path });
+      this._txAx25Frame(t, radio, frame);
+      this._emitMonitor(t, radio, 'tx', 'frmr', { addresses: [{ callsign: srcCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: 0x87, payload: info }, frame);
     }
   }
 
   // Drops any outstanding I-frames the peer's N(R) confirms it has now seen,
-  // and stops the retransmit timer once nothing is left outstanding.
-  _ackFrames(session, nr) {
+  // stops the retransmit timer once nothing is left outstanding, and lets
+  // any payload waiting behind the window go out now that there's room.
+  _ackFrames(t, radio, session, nr) {
     if (!session.sentFrames || session.sentFrames.length === 0) return;
     const front = session.sentFrames[0].ns;
     const ackedCount = Math.min((nr - front + 8) % 8, session.sentFrames.length);
     if (ackedCount > 0) session.sentFrames.splice(0, ackedCount);
     if (session.sentFrames.length === 0) this._clearIframeRetry(session);
+    this._pumpSendQueue(t, radio, session);
   }
 
+  // Returns false if transmission failed (adapter gone) so callers — all of
+  // them retry paths running well after the frame was first queued — can
+  // give up cleanly instead of crashing on a null adapter.
   _retransmitOutstanding(t, radio, session) {
     for (const f of session.sentFrames) {
-      this._txAx25Frame(t, radio, f.frame);
+      if (!this._txAx25Frame(t, radio, f.frame)) return false;
       this._emitMonitor(t, radio, 'tx', 'iframe', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: f.control, payload: f.payload }, f.frame);
+    }
+    return true;
+  }
+
+  // Actually puts a frame on the air now — only ever called when the
+  // window has room. Everything else (sendSessionText, the queue pump,
+  // YAPP) goes through _enqueueIframe instead.
+  _transmitIframe(t, radio, session, payload) {
+    const ns = session.vs & 0x07;
+    const control = ((session.vr & 0x07) << 5) | (ns << 1);
+    session.vs = (session.vs + 1) % 8;
+    const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control, pid: 0xf0, payload, path: session.path });
+    this._txAx25Frame(t, radio, frame);
+    session.sentFrames.push({ ns, frame, control, payload });
+    this._armIframeRetry(t, radio, session);
+    this._armT3(t, radio, session);
+    this._emitMonitor(t, radio, 'tx', 'iframe', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control, payload }, frame);
+  }
+
+  // Modulo-8 sequencing only has room for a handful of unacked frames
+  // before N(S) wraps and collides with an old one. Sends immediately if
+  // there's room in the window and the peer isn't RNR-busy; otherwise
+  // queues the payload to go out as soon as there is. This is what protects
+  // any rapid multi-frame send — a pasted multi-line paste, a script, and
+  // especially YAPP's chunk loop, which has no flow-control awareness of
+  // its own — from blowing straight through the window, which on a real RF
+  // link (round-trip ack time often 1-3+ seconds) it otherwise would on
+  // anything but a tiny transfer.
+  _enqueueIframe(t, radio, session, payload) {
+    if (session.sentFrames.length < this.maxOutstandingIframes && !session.peerBusy) {
+      this._transmitIframe(t, radio, session, payload);
+    } else {
+      session.sendQueue.push(payload);
+    }
+  }
+
+  _pumpSendQueue(t, radio, session) {
+    while (session.sendQueue.length > 0 && session.sentFrames.length < this.maxOutstandingIframes && !session.peerBusy) {
+      this._transmitIframe(t, radio, session, session.sendQueue.shift());
     }
   }
 
@@ -366,18 +477,76 @@ class TncManager extends EventEmitter {
     if (session.iframeRetryTimer) clearTimeout(session.iframeRetryTimer);
     session.iframeRetryTimer = setTimeout(() => {
       if (!this.sessions.has(session.key) || session.state !== 'connected' || session.sentFrames.length === 0) return;
+      if (session.peerBusy) {
+        // Don't hammer a receiver that just told us to back off — keep
+        // waiting for it to clear RNR on its own schedule instead.
+        this._armIframeRetry(t, radio, session);
+        return;
+      }
       if (session.iframeRetries >= this.iframeRetryCount) {
-        session.state = 'disconnected';
-        this.sessions.delete(session.key);
-        if (this.sessionLogger) this.sessionLogger.stopLog(session);
-        this.emit('session-state', this._sessionSnapshot(session));
-        this.emit('session-error', { sessionId: session.id, remoteCall: session.remoteCall, message: `Lost contact with ${session.remoteCall} — no acknowledgment after ${this.iframeRetryCount + 1} attempts.` });
+        this._giveUp(session, `Lost contact with ${session.remoteCall} — no acknowledgment after ${this.iframeRetryCount + 1} attempts.`);
         return;
       }
       session.iframeRetries += 1;
-      this._retransmitOutstanding(t, radio, session);
+      if (!this._retransmitOutstanding(t, radio, session)) {
+        this._giveUp(session, `TNC disconnected while talking to ${session.remoteCall}.`);
+        return;
+      }
       this._armIframeRetry(t, radio, session);
     }, this.iframeRetryMs);
+  }
+
+  _clearT3(session) {
+    if (session.t3Timer) { clearTimeout(session.t3Timer); session.t3Timer = null; }
+  }
+
+  // If a connected session has been completely silent for T3_IDLE_MS, poll
+  // the peer ourselves instead of just sitting there — otherwise a peer
+  // that silently vanished (powered off, out of range) leaves the session
+  // showing "connected" forever with nothing to ever notice the
+  // difference. Any real traffic in either direction re-arms this (see the
+  // callers), and a real reply from the peer resets the missed-poll count;
+  // only our own unanswered polls count toward giving up.
+  _armT3(t, radio, session) {
+    this._clearT3(session);
+    session.t3Timer = setTimeout(() => {
+      if (!this.sessions.has(session.key) || session.state !== 'connected') return;
+      const pollControl = buildSupervisoryControl(S_TYPE.RR, session.vr, true);
+      const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: pollControl, pid: null, payload: Buffer.alloc(0), path: session.path });
+      if (!this._txAx25Frame(t, radio, frame)) {
+        this._giveUp(session, `TNC disconnected while ${session.remoteCall} was connected.`);
+        return;
+      }
+      this._emitMonitor(t, radio, 'tx', 'rr', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: pollControl, payload: Buffer.alloc(0) }, frame);
+      session.t3MissedPolls = (session.t3MissedPolls || 0) + 1;
+      if (session.t3MissedPolls > this.t3MissedPollLimit) {
+        this._giveUp(session, `Lost contact with ${session.remoteCall} — no response to keep-alive poll.`);
+        return;
+      }
+      this._armT3(t, radio, session);
+    }, this.t3IdleMs);
+  }
+
+  // Shared teardown for every "the session is over, clean it up" path
+  // (explicit disconnect, inbound DISC/DM, shutdown) — stops every timer,
+  // aborts any in-progress file transfer, and removes the session. Callers
+  // that need to notify the peer (DISC/UA) do that themselves first.
+  _teardownConnected(session) {
+    this._clearSabmRetry(session);
+    this._clearIframeRetry(session);
+    this._clearT3(session);
+    session.state = 'disconnected';
+    if (session.yapp) { try { session.yapp.abort(); } catch (e) { /* ignore */ } }
+    if (this.sessionLogger) this.sessionLogger.stopLog(session);
+    this.emit('session-state', this._sessionSnapshot(session));
+    this.sessions.delete(session.key);
+  }
+
+  // Same teardown, plus a session-error explaining why — for every "we
+  // gave up" path (SABM/I-frame/T3 retries exhausted, connection refused).
+  _giveUp(session, message) {
+    this._teardownConnected(session);
+    this.emit('session-error', { sessionId: session.id, remoteCall: session.remoteCall, message });
   }
 
   // ---- outbound: unconnected (UI) ----
@@ -393,7 +562,7 @@ class TncManager extends EventEmitter {
 
   // ---- outbound: connected-mode sessions ----
   _newSession(t, radio, remoteCall, sessionKey, digiPath, scriptId) {
-    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, path: digiPath || [], state: 'connecting', vs: 0, vr: 0, buffer: [], mode: 'text', yapp: null, pendingScriptId: scriptId || null, logPath: null, retries: 0, retryTimer: null, sentFrames: [], iframeRetryTimer: null, iframeRetries: 0 };
+    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, path: digiPath || [], state: 'connecting', vs: 0, vr: 0, buffer: [], mode: 'text', yapp: null, pendingScriptId: scriptId || null, logPath: null, retries: 0, retryTimer: null, sentFrames: [], sendQueue: [], peerBusy: false, iframeRetryTimer: null, iframeRetries: 0, t3Timer: null, t3MissedPolls: 0 };
     this.sessions.set(sessionKey, session);
     return session;
   }
@@ -410,15 +579,15 @@ class TncManager extends EventEmitter {
     session.retryTimer = setTimeout(() => {
       if (!this.sessions.has(session.key) || session.state !== 'connecting') return;
       if (session.retries >= this.sabmRetryCount) {
-        session.state = 'disconnected';
-        this.sessions.delete(session.key);
-        this.emit('session-state', this._sessionSnapshot(session));
-        this.emit('session-error', { sessionId: session.id, remoteCall: session.remoteCall, message: `No response from ${session.remoteCall} after ${this.sabmRetryCount + 1} attempts.` });
+        this._giveUp(session, `No response from ${session.remoteCall} after ${this.sabmRetryCount + 1} attempts.`);
         return;
       }
       session.retries += 1;
       const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: CTL.SABM_P, pid: null, payload: Buffer.alloc(0), path: session.path });
-      this._txAx25Frame(t, radio, frame);
+      if (!this._txAx25Frame(t, radio, frame)) {
+        this._giveUp(session, `TNC disconnected while connecting to ${session.remoteCall}.`);
+        return;
+      }
       this._emitMonitor(t, radio, 'tx', 'sabm', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.SABM_P, payload: Buffer.alloc(0) }, frame);
       this._armSabmRetry(t, radio, session);
     }, this.sabmRetryMs);
@@ -452,17 +621,9 @@ class TncManager extends EventEmitter {
     if (session.mode === 'yapp') throw new Error('session is busy with a file transfer');
     const t = this.tncs.get(session.tncId);
     const radio = t.config.radios.find((r) => r.id === session.radioId);
-    const ns = session.vs & 0x07;
-    const control = ((session.vr & 0x07) << 5) | (ns << 1);
-    session.vs = (session.vs + 1) % 8;
-    const payload = Buffer.from(text, 'utf8');
-    const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control, pid: 0xf0, payload, path: session.path });
-    this._txAx25Frame(t, radio, frame);
-    session.sentFrames.push({ ns, frame, control, payload });
-    this._armIframeRetry(t, radio, session);
+    this._enqueueIframe(t, radio, session, Buffer.from(text, 'utf8'));
     if (this.sessionLogger) this.sessionLogger.appendLog(session, 'tx', text);
     this.emit('session-tx', { sessionId: session.id, text });
-    this._emitMonitor(t, radio, 'tx', 'iframe', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control, payload }, frame);
   }
 
   // Raw-byte variant of sendSessionText, used internally by YAPP file transfer.
@@ -471,14 +632,7 @@ class TncManager extends EventEmitter {
     if (!session || session.state !== 'connected') throw new Error('session not connected');
     const t = this.tncs.get(session.tncId);
     const radio = t.config.radios.find((r) => r.id === session.radioId);
-    const ns = session.vs & 0x07;
-    const control = ((session.vr & 0x07) << 5) | (ns << 1);
-    session.vs = (session.vs + 1) % 8;
-    const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control, pid: 0xf0, payload: buffer, path: session.path });
-    this._txAx25Frame(t, radio, frame);
-    session.sentFrames.push({ ns, frame, control, payload: buffer });
-    this._armIframeRetry(t, radio, session);
-    this._emitMonitor(t, radio, 'tx', 'iframe', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control, payload: buffer }, frame);
+    this._enqueueIframe(t, radio, session, buffer);
   }
 
   endSession(sessionId) {
@@ -489,13 +643,7 @@ class TncManager extends EventEmitter {
     const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: CTL.DISC_P, pid: null, payload: Buffer.alloc(0), path: session.path });
     this._txAx25Frame(t, radio, frame);
     this._emitMonitor(t, radio, 'tx', 'disc', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.DISC_P, payload: Buffer.alloc(0) }, frame);
-    this._clearSabmRetry(session);
-    this._clearIframeRetry(session);
-    session.state = 'disconnected';
-    if (session.yapp) { try { session.yapp.abort(); } catch (e) { /* ignore */ } }
-    if (this.sessionLogger) this.sessionLogger.stopLog(session);
-    this.emit('session-state', this._sessionSnapshot(session));
-    this.sessions.delete(session.key);
+    this._teardownConnected(session);
   }
 
   // ---- YAPP file transfer ----
@@ -576,7 +724,17 @@ class TncManager extends EventEmitter {
   }
 
   shutdown() {
-    for (const session of this.sessions.values()) { this._clearSabmRetry(session); this._clearIframeRetry(session); }
+    for (const session of Array.from(this.sessions.values())) {
+      if (session.state === 'connected') {
+        const t = this.tncs.get(session.tncId);
+        const radio = t && t.config.radios.find((r) => r.id === session.radioId);
+        if (t && radio) {
+          const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: CTL.DISC_P, pid: null, payload: Buffer.alloc(0), path: session.path });
+          this._txAx25Frame(t, radio, frame);
+        }
+      }
+      this._teardownConnected(session);
+    }
     for (const tncId of this.tncs.keys()) this.disconnectTnc(tncId);
   }
 }

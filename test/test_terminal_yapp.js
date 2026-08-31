@@ -21,6 +21,29 @@ function startBridge(port) {
   });
 }
 
+// Same relay, but each direction is delayed — standing in for a real RF
+// link's round-trip time, which is routinely 1-3+ seconds (TX/RX
+// turnaround, digipeating), nothing like a local loopback's near-zero
+// latency. YAPP paces its own chunk generation on a flat 50ms timer with no
+// ack-awareness at all, so without a real window at the AX.25 layer this is
+// exactly the condition that blows straight through modulo-8 sequencing.
+function startDelayedBridge(port, delayMs) {
+  return new Promise((resolve) => {
+    const clients = [];
+    const server = net.createServer((socket) => {
+      clients.push(socket);
+      socket.on('data', (data) => {
+        for (const other of clients) {
+          if (other === socket || other.destroyed) continue;
+          setTimeout(() => { if (!other.destroyed) other.write(data); }, delayMs);
+        }
+      });
+      socket.on('error', () => {});
+    });
+    server.listen(port, '127.0.0.1', () => resolve(server));
+  });
+}
+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitUntil = async (fn, timeoutMs = 8000) => {
   const deadline = Date.now() + timeoutMs;
@@ -115,12 +138,63 @@ async function main() {
     assert.strictEqual(sB.mode, 'text');
   });
 
-  console.log(`\nTests passed: ${pass}`);
-  console.log(`Tests failed: ${fail}`);
-
   mgrA.shutdown();
   mgrB.shutdown();
   bridge.close();
+
+  // --- a real transfer over a slow (RF-like) link never exceeds the
+  // outstanding-frame window, and still arrives byte-identical ---
+  const slowBridgePort = bridgePort + 1;
+  const slowBridge = await startDelayedBridge(slowBridgePort, 250);
+  const mgrA2 = new TncManager({ maxOutstandingIframes: 4 });
+  const mgrB2 = new TncManager({ maxOutstandingIframes: 4 });
+  const tncA2 = mgrA2.createTnc({ name: 'A2', type: 'kiss-tcp', connection: { host: '127.0.0.1', port: slowBridgePort } });
+  const tncB2 = mgrB2.createTnc({ name: 'B2', type: 'kiss-tcp', connection: { host: '127.0.0.1', port: slowBridgePort } });
+  const radioA2 = mgrA2.addRadio(tncA2.id, { callsign: 'N0CALL-9', portNumber: 0 });
+  mgrB2.addRadio(tncB2.id, { callsign: 'W1ABC-10', portNumber: 0 });
+  mgrA2.connectTnc(tncA2.id);
+  mgrB2.connectTnc(tncB2.id);
+  await wait(200);
+  const snap2 = mgrA2.startSession(tncA2.id, radioA2.id, 'W1ABC-10');
+  const connected2 = await waitUntil(() => mgrB2.sessions.size > 0 && Array.from(mgrA2.sessions.values()).some((s) => s.id === snap2.id && s.state === 'connected'));
+  if (!connected2) throw new Error('setup: A2/B2 should have connected over the slow bridge');
+  const sessionB2Id = Array.from(mgrB2.sessions.values())[0].id;
+
+  let maxOutstandingSeen = 0;
+  mgrA2.on('monitor', () => {
+    const sA = Array.from(mgrA2.sessions.values())[0];
+    if (sA) maxOutstandingSeen = Math.max(maxOutstandingSeen, sA.sentFrames.length);
+  });
+
+  const bigFile = path.join(scratchDir, 'big.bin');
+  const bigContent = Buffer.from(Array.from({ length: 4000 }, (_, i) => i % 256));
+  fs.writeFileSync(bigFile, bigContent);
+  const bigSavePath = path.join(scratchDir, 'big-received.bin');
+
+  const offersB2 = [];
+  mgrB2.on('file-transfer-offer', (e) => offersB2.push(e));
+  const completesA2 = [], completesB2 = [];
+  mgrA2.on('file-transfer-complete', (e) => completesA2.push(e));
+  mgrB2.on('file-transfer-complete', (e) => completesB2.push(e));
+
+  await test('a transfer over a slow (RF-like) link never exceeds the outstanding-frame window, and still completes byte-identically', async () => {
+    mgrA2.startFileSend(snap2.id, bigFile);
+    const gotOffer = await waitUntil(() => offersB2.length > 0);
+    assert.ok(gotOffer, 'B should have received the offer');
+    mgrB2.respondToFileOffer(sessionB2Id, true, bigSavePath);
+    const done = await waitUntil(() => completesA2.length > 0 && completesB2.length > 0, 30000);
+    assert.ok(done, 'both sides should report file-transfer-complete');
+    assert.ok(maxOutstandingSeen <= 4, `outstanding I-frames should never exceed the window (4), peaked at ${maxOutstandingSeen}`);
+    const received = fs.readFileSync(bigSavePath);
+    assert.ok(received.equals(bigContent), 'received bytes should exactly match the sent bytes despite the slow link');
+  });
+
+  console.log(`\nTests passed: ${pass}`);
+  console.log(`Tests failed: ${fail}`);
+
+  mgrA2.shutdown();
+  mgrB2.shutdown();
+  slowBridge.close();
   fs.rmSync(scratchDir, { recursive: true, force: true });
   process.exit(fail > 0 ? 1 : 0);
 }
