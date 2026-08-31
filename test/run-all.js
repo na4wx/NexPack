@@ -23,7 +23,8 @@ const files = [
   'test_aprs_parser.js',
   'test_aprs_manager_rf.js',
   'test_aprs_manager_tx.js',
-  'test_aprs_beacon_schedule_crash.js'
+  'test_aprs_beacon_schedule_crash.js',
+  'test_map_tile_cache.js'
 ];
 
 let failed = 0;

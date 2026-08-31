@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Popup, Polyline, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
@@ -12,6 +12,9 @@ import PersonIcon from '@mui/icons-material/Person';
 import ChatIcon from '@mui/icons-material/Chat';
 import PlaceIcon from '@mui/icons-material/Place';
 import CloseIcon from '@mui/icons-material/Close';
+import StorageIcon from '@mui/icons-material/Storage';
+import CachedOsmTileLayer from '../aprs/CachedOsmTileLayer';
+import MapCacheSettingsDialog from '../components/MapCacheSettingsDialog';
 import { getStationIconHtml, GLYPHS } from '../aprs/aprsIcons';
 
 const STALE_MS = 30 * 60 * 1000; // 30 minutes — matches typical real-client defaults (UI-View etc.)
@@ -445,6 +448,7 @@ export default function AprsWorkspace({ tncs }) {
   const [selectedCallsign, setSelectedCallsign] = useState(null);
   const [search, setSearch] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mapCacheOpen, setMapCacheOpen] = useState(false);
   const [myStationOpen, setMyStationOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [objectsOpen, setObjectsOpen] = useState(false);
@@ -510,6 +514,7 @@ export default function AprsWorkspace({ tncs }) {
             </IconButton>
           </Tooltip>
           <Tooltip title="Objects"><IconButton size="small" onClick={() => setObjectsOpen(true)}><PlaceIcon fontSize="small" /></IconButton></Tooltip>
+          <Tooltip title="Map cache"><IconButton size="small" onClick={() => setMapCacheOpen(true)}><StorageIcon fontSize="small" /></IconButton></Tooltip>
           <Tooltip title="APRS-IS settings"><IconButton size="small" onClick={() => setSettingsOpen(true)}><SettingsIcon fontSize="small" /></IconButton></Tooltip>
         </Stack>
         <TextField size="small" placeholder="Search callsign…" value={search} onChange={(e) => setSearch(e.target.value)} sx={{ mx: 1, mb: 1 }} />
@@ -528,7 +533,7 @@ export default function AprsWorkspace({ tncs }) {
 
       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
         <MapContainer center={defaultCenter} zoom={withPosition.length ? 8 : 4} style={{ height: '100%', width: '100%', background: '#0d1117' }}>
-          <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <CachedOsmTileLayer attribution='&copy; OpenStreetMap contributors' />
           {homePosition && <Circle center={[homePosition.lat, homePosition.lon]} radius={16093} pathOptions={{ color: '#5b9bff', weight: 1, fillOpacity: 0.03 }} />}
           {withPosition.map((s) => (
             <Marker key={s.callsign} position={[s.lastPosition.lat, s.lastPosition.lon]} icon={stationIcon(s.symbol)} opacity={isStale(s.lastSeen) ? 0.4 : 1} eventHandlers={{ click: () => setSelectedCallsign(s.callsign) }}>
@@ -567,6 +572,7 @@ export default function AprsWorkspace({ tncs }) {
       )}
 
       <AprsSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={() => {}} />
+      <MapCacheSettingsDialog open={mapCacheOpen} onClose={() => setMapCacheOpen(false)} />
       <MyStationDialog open={myStationOpen} onClose={() => setMyStationOpen(false)} onSaved={() => window.nexdigi.aprsGetMyStation().then((my) => setHomePosition(my.homePosition || null))} tncs={tncs} />
       <MessagesDialog open={messagesOpen} onClose={() => setMessagesOpen(false)} initialTarget={messageTarget} />
       <ObjectsDialog open={objectsOpen} onClose={() => setObjectsOpen(false)} />

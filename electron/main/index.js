@@ -8,6 +8,7 @@ const RfBbsClient = require('./bbs/RfBbsClient');
 const BbsFacade = require('./bbs/BbsFacade');
 const ChatManager = require('./chat/ChatManager');
 const AprsManager = require('./aprs/AprsManager');
+const MapTileCache = require('./maps/MapTileCache');
 
 let mainWindow;
 let tncManager;
@@ -18,6 +19,7 @@ let rfBbsClient;
 let bbsFacade;
 let chatManager;
 let aprsManager;
+let mapTileCache;
 
 function forwardToRenderer(eventName) {
   tncManager.on(eventName, (payload) => {
@@ -54,6 +56,7 @@ app.whenReady().then(() => {
   bbsFacade = new BbsFacade({ userDataDir: app.getPath('userData'), nexDigiClient, rfBbsClient });
   chatManager = new ChatManager({ nexDigiClient });
   aprsManager = new AprsManager({ userDataDir: app.getPath('userData'), tncManager });
+  mapTileCache = new MapTileCache({ userDataDir: app.getPath('userData') });
 
   // TncManager only emits its own 'error' (as opposed to per-adapter errors,
   // which it already absorbs itself) when persisting tncs.json fails — rare,
@@ -191,6 +194,11 @@ app.whenReady().then(() => {
   ipcMain.handle('aprs:createObject', (_e, name, opts) => aprsManager.createObject(name, opts));
   ipcMain.handle('aprs:killObject', (_e, name) => aprsManager.killObject(name));
   ipcMain.handle('aprs:getObjects', () => aprsManager.getObjects());
+
+  ipcMain.handle('maps:getTile', async (_e, z, x, y) => mapTileCache.getTile(z, x, y));
+  ipcMain.handle('maps:getCacheInfo', () => mapTileCache.getCacheInfo());
+  ipcMain.handle('maps:setCacheBudget', (_e, bytes) => mapTileCache.setBudget(bytes));
+  ipcMain.handle('maps:clearCache', () => mapTileCache.clear());
 
   createWindow();
 
