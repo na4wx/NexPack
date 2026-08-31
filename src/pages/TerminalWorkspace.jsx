@@ -19,6 +19,14 @@ function parsePathInput(str) {
   return str.split(',').map((s) => s.trim()).filter(Boolean).slice(0, MAX_PATH_HOPS);
 }
 
+// Real packet BBS/node software (e.g. linbpq) conventionally ends lines with
+// a bare CR (\r), not CRLF — a terminal emulator treats that as a line break,
+// but a browser's `white-space: pre-wrap` only breaks on \n, so bare CRs
+// otherwise render as if the newline were never there.
+function normalizeLineEndings(text) {
+  return text.replace(/\r\n?/g, '\n');
+}
+
 export default function TerminalWorkspace({ tncs }) {
   const [monitorEvents, setMonitorEvents] = useState([]);
   const [tabs, setTabs] = useState([{ key: 'all', kind: 'monitor', label: 'All traffic', radioId: null, tncId: null }]);
@@ -61,7 +69,7 @@ export default function TerminalWorkspace({ tncs }) {
       });
     });
     const offData = window.nexdigi.onSessionData(({ sessionId, text }) => {
-      setTranscripts((prev) => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { dir: 'rx', text }] }));
+      setTranscripts((prev) => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { dir: 'rx', text: normalizeLineEndings(text) }] }));
     });
     const offTx = window.nexdigi.onSessionTx(({ sessionId, text }) => {
       setTranscripts((prev) => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { dir: 'tx', text }] }));
