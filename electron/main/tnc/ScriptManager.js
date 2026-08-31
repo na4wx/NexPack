@@ -65,7 +65,7 @@ class ScriptManager {
       for (const step of script.steps) {
         if (aborted || disconnected) throw new Error('script aborted');
         if (step.type === 'send') {
-          this.tncManager.sendSessionText(sessionId, step.text);
+          this.tncManager.sendSessionLine(sessionId, step.text);
         } else if (step.type === 'wait') {
           await delay(step.ms || 0);
         } else if (step.type === 'waitFor') {

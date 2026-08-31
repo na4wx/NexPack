@@ -61,8 +61,12 @@ async function main() {
   let sessionBId;
   mgrB.on('session-state', (s) => { if (s.state === 'connected') sessionBId = s.id; });
   mgrB.on('session-data', (d) => {
-    if (d.text === 'MYCALL') mgrB.sendSessionText(d.sessionId, 'login:');
-    else if (d.text === 'mypassword') mgrB.sendSessionText(d.sessionId, 'Welcome');
+    // Script "send" steps now CR-terminate each line (real node/BBS
+    // software needs that to recognize a complete command) — matching a
+    // real BBS's own line handling by trimming before comparing.
+    const text = d.text.trim();
+    if (text === 'MYCALL') mgrB.sendSessionText(d.sessionId, 'login:');
+    else if (text === 'mypassword') mgrB.sendSessionText(d.sessionId, 'Welcome');
   });
 
   await test('a saved script survives persistence to scripts.json', async () => {
@@ -92,7 +96,9 @@ async function main() {
     const snap = mgrA.startSession(tncA.id, radioA.id, 'W1ABC-10', [], global.__scriptId);
     const done = await waitUntil(() => completes.some((e) => e.sessionId === snap.id));
     assert.ok(done, 'script should complete');
-    assert.deepStrictEqual(sentByA, ['MYCALL', 'mypassword'], 'script should have sent exactly the scripted lines in order');
+    // Script "send" steps are now CR-terminated (real node/BBS software
+    // needs that to recognize a complete command) — trim before comparing.
+    assert.deepStrictEqual(sentByA.map((t) => t.trim()), ['MYCALL', 'mypassword'], 'script should have sent exactly the scripted lines in order');
     mgrA.endSession(snap.id);
   });
 

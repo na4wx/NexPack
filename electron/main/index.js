@@ -112,7 +112,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('terminal:sendUnproto', (_e, tncId, radioId, dest, text) => tncManager.sendUnproto(tncId, radioId, dest, text));
   ipcMain.handle('terminal:startSession', (_e, tncId, radioId, remoteCall, digiPath, scriptId) => tncManager.startSession(tncId, radioId, remoteCall, digiPath, scriptId));
-  ipcMain.handle('terminal:sendSessionText', (_e, sessionId, text) => tncManager.sendSessionText(sessionId, text));
+  ipcMain.handle('terminal:sendSessionText', (_e, sessionId, text) => tncManager.sendSessionLine(sessionId, text));
   ipcMain.handle('terminal:endSession', (_e, sessionId) => tncManager.endSession(sessionId));
 
   ipcMain.handle('terminal:pickFileToSend', async () => {

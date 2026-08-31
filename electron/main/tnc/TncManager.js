@@ -626,6 +626,18 @@ class TncManager extends EventEmitter {
     this.emit('session-tx', { sessionId: session.id, text });
   }
 
+  // For a human (or a connect script) typing a command line, as opposed to
+  // sendSessionText's raw bytes-as-given (used by RfBbsClient, which drives
+  // NexDigi's own BBS protocol exactly and adds its own terminators where
+  // it needs them). Real packet BBS/node software (linbpq, etc.) expects
+  // each line CR-terminated the way a real terminal sends Enter — without
+  // it, the remote just keeps buffering, waiting for a line that never
+  // arrives, and never responds at all (confirmed live: commands got
+  // acked at the AX.25 layer but no application-level reply ever came).
+  sendSessionLine(sessionId, text) {
+    this.sendSessionText(sessionId, `${text}\r`);
+  }
+
   // Raw-byte variant of sendSessionText, used internally by YAPP file transfer.
   sendSessionRaw(sessionId, buffer) {
     const session = this._findSession(sessionId);
