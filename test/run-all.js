@@ -22,7 +22,8 @@ const files = [
   'test_winlink_spawn_error.js',
   'test_aprs_parser.js',
   'test_aprs_manager_rf.js',
-  'test_aprs_manager_tx.js'
+  'test_aprs_manager_tx.js',
+  'test_aprs_beacon_schedule_crash.js'
 ];
 
 let failed = 0;

@@ -250,7 +250,13 @@ class AprsManager extends EventEmitter {
     if (this._beaconTimer) { clearInterval(this._beaconTimer); this._beaconTimer = null; }
     const beacon = this.getMyStation().beacon || {};
     if (beacon.enabled && beacon.intervalMinutes > 0) {
-      this._beaconTimer = setInterval(() => this.beaconNow(), beacon.intervalMinutes * 60000);
+      // beaconNow() throws synchronously (e.g. no callsign/home position
+      // set) — inside a bare setInterval callback that throw has nothing to
+      // catch it and crashes the whole app. The manual "Beacon now" button
+      // already handles this itself; the scheduled timer needs its own guard.
+      this._beaconTimer = setInterval(() => {
+        try { this.beaconNow(); } catch (e) { this.emit('aprs-error', { message: `Scheduled beacon failed: ${e.message}` }); }
+      }, beacon.intervalMinutes * 60000);
     }
   }
 
