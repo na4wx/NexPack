@@ -62,6 +62,9 @@
             "x64"
           ]
         }
+      ],
+      "extraResources": [
+        { "from": "pat/win32", "to": "pat/win32" }
       ]
     },
     "msi": {
@@ -73,7 +76,10 @@
       "target": [
         "dmg"
       ],
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "extraResources": [
+        { "from": "pat/darwin", "to": "pat/darwin" }
+      ]
     },
     "linux": {
       "icon": "build/icon.png",
@@ -81,7 +87,10 @@
         "deb"
       ],
       "category": "HamRadio",
-      "maintainer": "Jordan G Webb <jwebb@shekinatech.com>"
+      "maintainer": "Jordan G Webb <jwebb@shekinatech.com>",
+      "extraResources": [
+        { "from": "pat/linux", "to": "pat/linux" }
+      ]
     }
   }
 }

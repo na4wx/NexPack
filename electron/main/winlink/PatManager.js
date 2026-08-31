@@ -92,9 +92,17 @@ class PatManager extends EventEmitter {
   _resolveBinaryPath() {
     if (process.env.NEXPACK_PAT_PATH) return process.env.NEXPACK_PAT_PATH;
     if (this.resourcesPath) {
-      const platDir = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux';
       const bin = process.platform === 'win32' ? 'pat.exe' : 'pat';
-      const bundled = path.join(this.resourcesPath, 'pat', platDir, bin);
+      // Upstream (la5nta/pat) only publishes windows/i386 and darwin/amd64
+      // binaries — no native win/arm64 build needed (32-bit runs fine
+      // under WOW64) and no native darwin/arm64 build exists at all (runs
+      // under Rosetta 2 instead), so those two are bundled unsplit. Linux
+      // does publish real x64 and arm64 builds, and NexPack ships separate
+      // packages for each, so that one has to pick the matching arch —
+      // bundling the wrong one would just fail to execute outright.
+      const bundled = process.platform === 'win32' ? path.join(this.resourcesPath, 'pat', 'win32', bin)
+        : process.platform === 'darwin' ? path.join(this.resourcesPath, 'pat', 'darwin', bin)
+        : path.join(this.resourcesPath, 'pat', 'linux', process.arch, bin);
       if (fs.existsSync(bundled)) return bundled;
     }
     // Dev fallback: rely on `pat` being on PATH (e.g. `go install github.com/la5nta/pat@latest`).
