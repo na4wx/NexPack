@@ -299,6 +299,7 @@ class TncManager extends EventEmitter {
       session.state = 'connected';
       session.vr = 0; session.vs = 0;
       session.pendingRx.clear();
+      session.recentDeliveries = [];
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: CTL.UA_F, pid: null, payload: Buffer.alloc(0) }));
       if (this.sessionLogger) this.sessionLogger.startLog(session);
       this.emit('session-state', this._sessionSnapshot(session));
@@ -341,13 +342,33 @@ class TncManager extends EventEmitter {
       // behind is a stale duplicate replay of something already delivered
       // and gets silently discarded instead of re-delivered out of order.
       if (ns === session.vr) {
-        session.vr = (ns + 1) % 8;
-        this._deliverIframePayload(session, parsed.payload);
-        while (session.pendingRx.has(session.vr)) {
-          const buffered = session.pendingRx.get(session.vr);
-          session.pendingRx.delete(session.vr);
-          session.vr = (session.vr + 1) % 8;
-          this._deliverIframePayload(session, buffered);
+        // Modulo-8 sequencing can't tell "the next new frame" from "a full
+        // pass (8 frames) worth of retransmission that happens to land back
+        // on this exact number" — both look identical to a bare ns===vr
+        // check. Confirmed live: a peer whose burst spanned the whole
+        // sequence space kept retransmitting its entire reply because
+        // something never satisfied it, and this ambiguity meant we kept
+        // treating every replay as brand-new data — re-displaying the same
+        // content forever and (worse) re-advancing V(R) each time, feeding
+        // the peer an ack sequence that no longer corresponded to reality.
+        // A byte-identical repeat of something delivered moments ago is
+        // recognized as a retransmit instead: re-acked with the CURRENT,
+        // unchanged V(R) (the spec-correct response to a duplicate) rather
+        // than advancing past it again.
+        if (this._isDuplicateDelivery(session, ns, parsed.payload)) {
+          // fall through to send the unchanged ack below
+        } else {
+          session.vr = (ns + 1) % 8;
+          this._deliverIframePayload(session, parsed.payload);
+          this._recordDelivery(session, ns, parsed.payload);
+          while (session.pendingRx.has(session.vr)) {
+            const bufferedNs = session.vr;
+            const buffered = session.pendingRx.get(bufferedNs);
+            session.pendingRx.delete(bufferedNs);
+            session.vr = (session.vr + 1) % 8;
+            this._deliverIframePayload(session, buffered);
+            this._recordDelivery(session, bufferedNs, buffered);
+          }
         }
       } else {
         const distance = (ns - session.vr + 8) % 8;
@@ -406,9 +427,6 @@ class TncManager extends EventEmitter {
     }
   }
 
-  // Drops any outstanding I-frames the peer's N(R) confirms it has now seen,
-  // stops the retransmit timer once nothing is left outstanding, and lets
-  // any payload waiting behind the window go out now that there's room.
   // Applies one received I-frame's payload to the session — YAPP transfer,
   // a fresh YAPP init, or plain text — exactly once, in correct N(S) order
   // (called either immediately or when draining session.pendingRx).
@@ -425,6 +443,25 @@ class TncManager extends EventEmitter {
       if (this.sessionLogger) this.sessionLogger.appendLog(session, 'rx', text);
       this.emit('session-data', { sessionId: session.id, text });
     }
+  }
+
+  // Small ring buffer of what's actually been delivered recently, purely to
+  // recognize a peer's full-window retransmission landing back on the same
+  // ns by coincidence (see the comment where this is used). Deliberately
+  // scoped to text mode only — YAPP binary chunks can be legitimately
+  // byte-identical (e.g. a run of zero bytes in the file), where silently
+  // dropping a "duplicate" would corrupt the transfer instead of just
+  // re-showing a line of text.
+  _recordDelivery(session, ns, payload) {
+    if (session.mode !== 'text') return;
+    session.recentDeliveries.push({ ns, payload, at: Date.now() });
+    if (session.recentDeliveries.length > 16) session.recentDeliveries.shift();
+  }
+
+  _isDuplicateDelivery(session, ns, payload) {
+    if (session.mode !== 'text') return false;
+    const now = Date.now();
+    return session.recentDeliveries.some((r) => r.ns === ns && now - r.at < 60000 && r.payload.equals(payload));
   }
 
   _ackFrames(t, radio, session, nr) {
@@ -584,7 +621,7 @@ class TncManager extends EventEmitter {
 
   // ---- outbound: connected-mode sessions ----
   _newSession(t, radio, remoteCall, sessionKey, digiPath, scriptId) {
-    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, path: digiPath || [], state: 'connecting', vs: 0, vr: 0, buffer: [], mode: 'text', yapp: null, pendingScriptId: scriptId || null, logPath: null, retries: 0, retryTimer: null, sentFrames: [], sendQueue: [], peerBusy: false, iframeRetryTimer: null, iframeRetries: 0, t3Timer: null, t3MissedPolls: 0, pendingRx: new Map() };
+    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, path: digiPath || [], state: 'connecting', vs: 0, vr: 0, buffer: [], mode: 'text', yapp: null, pendingScriptId: scriptId || null, logPath: null, retries: 0, retryTimer: null, sentFrames: [], sendQueue: [], peerBusy: false, iframeRetryTimer: null, iframeRetries: 0, t3Timer: null, t3MissedPolls: 0, pendingRx: new Map(), recentDeliveries: [] };
     this.sessions.set(sessionKey, session);
     return session;
   }

@@ -348,6 +348,37 @@ async function main() {
     peer.server.close();
   });
 
+  // --- 11: a peer that retransmits its entire reply (a full modulo-8 pass)
+  // must not have that treated as brand-new data just because N(S) wraps
+  // back to exactly what we expect next ---
+  port += 1;
+  await test('a full-window retransmission is recognized as a duplicate, not re-delivered as new data', async () => {
+    const peer = await startFakePeer(port, () => {}); // never satisfied — retransmits regardless of our acks, on purpose
+    const { mgrA, sessionId } = await connectA(port);
+
+    const received = [];
+    const acksSent = [];
+    mgrA.on('session-data', (d) => { if (d.sessionId === sessionId) received.push(d.text); });
+    mgrA.on('monitor', (e) => { if (e.direction === 'tx' && e.frameType === 'rr') acksSent.push(e.control); });
+
+    const iframe = (ns, text) => buildAx25Frame({ dest: OUR_CALL, src: PEER_CALL, control: (0 << 5) | (ns << 1), pid: 0xf0, payload: Buffer.from(text, 'utf8') });
+    const lines = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']; // a full 8-frame pass, ns 0..7
+
+    for (let ns = 0; ns < 8; ns++) { peer.send(iframe(ns, lines[ns])); await wait(10); }
+    await wait(50);
+    assert.deepStrictEqual(received, lines, 'the first pass should be delivered once, in order');
+
+    // Confirmed live against a real node: it kept retransmitting its whole
+    // reply — same content, same N(S) values, starting the cycle over.
+    for (let ns = 0; ns < 8; ns++) { peer.send(iframe(ns, lines[ns])); await wait(10); }
+    await wait(50);
+
+    assert.deepStrictEqual(received, lines, `the retransmitted pass should NOT be delivered again, got: ${JSON.stringify(received)}`);
+
+    mgrA.shutdown();
+    peer.server.close();
+  });
+
   console.log(`\nTests passed: ${pass}`);
   console.log(`Tests failed: ${fail}`);
   process.exit(fail > 0 ? 1 : 0);
