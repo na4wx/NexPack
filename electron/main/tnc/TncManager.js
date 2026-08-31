@@ -298,6 +298,7 @@ class TncManager extends EventEmitter {
       session = session || this._newSession(t, radio, srcCall, sessionKey);
       session.state = 'connected';
       session.vr = 0; session.vs = 0;
+      session.pendingRx.clear();
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: CTL.UA_F, pid: null, payload: Buffer.alloc(0) }));
       if (this.sessionLogger) this.sessionLogger.startLog(session);
       this.emit('session-state', this._sessionSnapshot(session));
@@ -328,26 +329,29 @@ class TncManager extends EventEmitter {
       const incomingPf = (parsed.control & 0x10) !== 0;
       const nr = (parsed.control >> 5) & 0x07;
       this._ackFrames(t, radio, session, nr);
-      // Real-world peers aren't always perfectly sequenced (e.g. a stale
-      // duplicate resend, or a peer whose own N(S) bookkeeping briefly
-      // slips) — rejecting or dropping their data on a mismatch risks
-      // losing content a lenient real terminal would have shown. Accept
-      // what arrives and track our own receive count from it; the retry
-      // logic that matters here is retransmitting *our own* frames when
-      // the peer REJects or never acks them (below), not policing theirs.
-      session.vr = (ns + 1) % 8;
-      const looksLikeYappInit = session.mode === 'text' && parsed.payload.length >= 2 && parsed.payload[0] === 0x05 && parsed.payload[1] === 0x01;
-      if (session.mode === 'yapp' && session.yapp) {
-        session.yapp.onBytes(parsed.payload);
-      } else if (looksLikeYappInit) {
-        const receiver = this._beginIncomingOffer(session);
-        receiver.onBytes(parsed.payload);
+      // Real-world peers aren't always perfectly sequenced (a burst of
+      // frames can arrive out of send order even when none are actually
+      // lost) — rejecting or dropping data on a mismatch risks losing
+      // content a lenient real terminal would have shown, but delivering
+      // it immediately in *arrival* order instead of *send* order garbles
+      // the transcript (confirmed live: the tail of a multi-frame reply
+      // showed up interleaved with a later command's response). Frames
+      // that arrive ahead of what we expect are buffered and only
+      // delivered once the gap in front of them fills in; a frame that's
+      // behind is a stale duplicate replay of something already delivered
+      // and gets silently discarded instead of re-delivered out of order.
+      if (ns === session.vr) {
+        session.vr = (ns + 1) % 8;
+        this._deliverIframePayload(session, parsed.payload);
+        while (session.pendingRx.has(session.vr)) {
+          const buffered = session.pendingRx.get(session.vr);
+          session.pendingRx.delete(session.vr);
+          session.vr = (session.vr + 1) % 8;
+          this._deliverIframePayload(session, buffered);
+        }
       } else {
-        let text = '';
-        try { text = parsed.payload.toString('utf8'); } catch (e) { /* ignore */ }
-        session.buffer.push(text);
-        if (this.sessionLogger) this.sessionLogger.appendLog(session, 'rx', text);
-        this.emit('session-data', { sessionId: session.id, text });
+        const distance = (ns - session.vr + 8) % 8;
+        if (distance <= 4) session.pendingRx.set(ns, parsed.payload);
       }
       const rrControl = buildSupervisoryControl(S_TYPE.RR, session.vr, incomingPf);
       this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: rrControl, pid: null, payload: Buffer.alloc(0) }));
@@ -405,6 +409,24 @@ class TncManager extends EventEmitter {
   // Drops any outstanding I-frames the peer's N(R) confirms it has now seen,
   // stops the retransmit timer once nothing is left outstanding, and lets
   // any payload waiting behind the window go out now that there's room.
+  // Applies one received I-frame's payload to the session — YAPP transfer,
+  // a fresh YAPP init, or plain text — exactly once, in correct N(S) order
+  // (called either immediately or when draining session.pendingRx).
+  _deliverIframePayload(session, payload) {
+    const looksLikeYappInit = session.mode === 'text' && payload.length >= 2 && payload[0] === 0x05 && payload[1] === 0x01;
+    if (session.mode === 'yapp' && session.yapp) {
+      session.yapp.onBytes(payload);
+    } else if (looksLikeYappInit) {
+      this._beginIncomingOffer(session).onBytes(payload);
+    } else {
+      let text = '';
+      try { text = payload.toString('utf8'); } catch (e) { /* ignore */ }
+      session.buffer.push(text);
+      if (this.sessionLogger) this.sessionLogger.appendLog(session, 'rx', text);
+      this.emit('session-data', { sessionId: session.id, text });
+    }
+  }
+
   _ackFrames(t, radio, session, nr) {
     if (!session.sentFrames || session.sentFrames.length === 0) return;
     const front = session.sentFrames[0].ns;
@@ -562,7 +584,7 @@ class TncManager extends EventEmitter {
 
   // ---- outbound: connected-mode sessions ----
   _newSession(t, radio, remoteCall, sessionKey, digiPath, scriptId) {
-    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, path: digiPath || [], state: 'connecting', vs: 0, vr: 0, buffer: [], mode: 'text', yapp: null, pendingScriptId: scriptId || null, logPath: null, retries: 0, retryTimer: null, sentFrames: [], sendQueue: [], peerBusy: false, iframeRetryTimer: null, iframeRetries: 0, t3Timer: null, t3MissedPolls: 0 };
+    const session = { id: id(), key: sessionKey, tncId: t.config.id, radioId: radio.id, remoteCall, path: digiPath || [], state: 'connecting', vs: 0, vr: 0, buffer: [], mode: 'text', yapp: null, pendingScriptId: scriptId || null, logPath: null, retries: 0, retryTimer: null, sentFrames: [], sendQueue: [], peerBusy: false, iframeRetryTimer: null, iframeRetries: 0, t3Timer: null, t3MissedPolls: 0, pendingRx: new Map() };
     this.sessions.set(sessionKey, session);
     return session;
   }

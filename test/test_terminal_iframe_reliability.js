@@ -320,6 +320,34 @@ async function main() {
     peer.server.close();
   });
 
+  // --- 10: frames that arrive out of send order (a real, normal RF
+  // occurrence, not just loss) must still be DISPLAYED in the order they
+  // were sent, not the order they happened to arrive ---
+  port += 1;
+  await test('I-frames that arrive out of order are resequenced before being delivered', async () => {
+    const peer = await startFakePeer(port, () => {}); // acks/retries irrelevant to this test
+    const { mgrA, sessionId } = await connectA(port);
+
+    const received = [];
+    mgrA.on('session-data', (d) => { if (d.sessionId === sessionId) received.push(d.text); });
+
+    // Simulates exactly what was reported live: a multi-frame reply where
+    // the tail (N(S)=2) physically arrives before the middle piece
+    // (N(S)=1) — real RF reordering, not a dropped frame.
+    const iframe = (ns, text) => buildAx25Frame({ dest: OUR_CALL, src: PEER_CALL, control: (0 << 5) | (ns << 1), pid: 0xf0, payload: Buffer.from(text, 'utf8') });
+    peer.send(iframe(0, 'first '));
+    await wait(30);
+    peer.send(iframe(2, 'third ')); // out of order — arrives before N(S)=1
+    await wait(30);
+    peer.send(iframe(1, 'second ')); // fills the gap
+
+    await wait(150);
+    assert.deepStrictEqual(received, ['first ', 'second ', 'third '], `expected delivery in send order regardless of arrival order, got: ${JSON.stringify(received)}`);
+
+    mgrA.shutdown();
+    peer.server.close();
+  });
+
   console.log(`\nTests passed: ${pass}`);
   console.log(`Tests failed: ${fail}`);
   process.exit(fail > 0 ? 1 : 0);
