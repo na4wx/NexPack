@@ -89,9 +89,10 @@ function id() { return crypto.randomUUID(); }
 // NexDigi has no equivalent of (its channelManager.js is a flat
 // channel->adapter map with no TNC/radio hierarchy) — deliberately new.
 class TncManager extends EventEmitter {
-  constructor({ configPath, userDataDir, sabmRetryMs, sabmRetryCount, iframeRetryMs, iframeRetryCount, maxOutstandingIframes, t3IdleMs, t3MissedPollLimit } = {}) {
+  constructor({ configPath, userDataDir, soundModemManager, sabmRetryMs, sabmRetryCount, iframeRetryMs, iframeRetryCount, maxOutstandingIframes, t3IdleMs, t3MissedPollLimit } = {}) {
     super();
     this.configPath = configPath;
+    this.soundModemManager = soundModemManager || null;
     this.tncs = new Map(); // id -> { config: {id,name,type,connection,radios:[]}, adapter, status, rxBuffer }
     this.sessions = new Map(); // sessionId -> session state
     this.sessionLogger = userDataDir ? new SessionLogger({ userDataDir }) : null;
@@ -169,10 +170,15 @@ class TncManager extends EventEmitter {
   }
 
   // ---- connection lifecycle ----
-  connectTnc(tncId) {
+  // Async because the 'soundmodem' type has to spawn and wait on a Direwolf
+  // subprocess before there's a KISS port to connect an adapter to — every
+  // other type resolves synchronously and just returns an already-resolved
+  // promise, so nothing about their behavior (or existing callers that treat
+  // this as fire-and-forget) changes.
+  async connectTnc(tncId) {
     const t = this.tncs.get(tncId);
     if (!t) throw new Error('unknown TNC');
-    if (t.adapter) return; // already connecting/connected
+    if (t.adapter || t.status === 'connecting') return; // already connecting/connected
     const conn = t.config.connection || {};
     if (t.config.type === 'serial') {
       t.adapter = new SerialKissAdapter({ port: conn.path, baud: conn.baud || 9600 });
@@ -180,6 +186,22 @@ class TncManager extends EventEmitter {
       t.adapter = new KissTcpAdapter({ host: conn.host, port: conn.port });
     } else if (t.config.type === 'agwpe') {
       t.adapter = new AgwpeAdapter({ host: conn.host, port: conn.port, callsign: (t.config.radios[0] && t.config.radios[0].callsign) || 'N0CALL' });
+    } else if (t.config.type === 'soundmodem') {
+      if (!this.soundModemManager) throw new Error('sound modem support is not available');
+      this._setStatus(t, 'connecting');
+      let port;
+      try {
+        ({ port } = await this.soundModemManager.startFor(tncId, {
+          ...conn,
+          callsign: (t.config.radios[0] && t.config.radios[0].callsign) || 'N0CALL'
+        }));
+      } catch (e) {
+        this._setStatus(t, 'error', e);
+        return;
+      }
+      t.adapter = new KissTcpAdapter({ host: '127.0.0.1', port });
+      this._wireAdapter(t);
+      return;
     } else {
       throw new Error(`unknown TNC type: ${t.config.type}`);
     }
@@ -187,12 +209,17 @@ class TncManager extends EventEmitter {
     this._setStatus(t, 'connecting');
   }
 
-  disconnectTnc(tncId) {
+  async disconnectTnc(tncId) {
     const t = this.tncs.get(tncId);
-    if (!t || !t.adapter) return;
-    try { t.adapter.close(); } catch (e) { /* ignore */ }
-    t.adapter = null;
+    if (!t) return;
+    if (t.adapter) {
+      try { t.adapter.close(); } catch (e) { /* ignore */ }
+      t.adapter = null;
+    }
     this._setStatus(t, 'disconnected');
+    if (t.config.type === 'soundmodem' && this.soundModemManager) {
+      await this.soundModemManager.stopFor(tncId);
+    }
   }
 
   _setStatus(t, status, error) {

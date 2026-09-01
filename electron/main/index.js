@@ -3,6 +3,7 @@ const path = require('path');
 const TncManager = require('./tnc/TncManager');
 const ScriptManager = require('./tnc/ScriptManager');
 const PatManager = require('./winlink/PatManager');
+const SoundModemManager = require('./soundmodem/SoundModemManager');
 const NexDigiClient = require('./bbs/NexDigiClient');
 const RfBbsClient = require('./bbs/RfBbsClient');
 const BbsFacade = require('./bbs/BbsFacade');
@@ -17,6 +18,7 @@ let mainWindow;
 let tncManager;
 let scriptManager;
 let patManager;
+let soundModemManager;
 let nexDigiClient;
 let rfBbsClient;
 let bbsFacade;
@@ -54,7 +56,8 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  tncManager = new TncManager({ configPath: path.join(app.getPath('userData'), 'tncs.json'), userDataDir: app.getPath('userData') });
+  soundModemManager = new SoundModemManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
+  tncManager = new TncManager({ configPath: path.join(app.getPath('userData'), 'tncs.json'), userDataDir: app.getPath('userData'), soundModemManager });
   scriptManager = new ScriptManager({ userDataDir: app.getPath('userData'), tncManager });
   patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
   nexDigiClient = new NexDigiClient({ userDataDir: app.getPath('userData') });
@@ -79,6 +82,11 @@ app.whenReady().then(() => {
   // failure well after start() has already resolved) would crash the
   // entire Electron process — Node throws when 'error' has no listeners.
   patManager.on('error', (err) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', `ERROR: ${err.message}\n`); });
+
+  soundModemManager.on('log', (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('soundmodem-log', payload); });
+  // A direwolf crash after startup has no other listener to catch it —
+  // same 'error'-with-zero-listeners crash class documented above for pat.
+  soundModemManager.on('error', ({ tncId, error }) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('soundmodem-log', { tncId, line: `ERROR: ${error.message}\n` }); });
 
   for (const evt of ['chat-event', 'chat-error', 'chat-socket-closed']) {
     chatManager.on(evt, (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(evt, payload); });
@@ -238,7 +246,10 @@ app.on('before-quit', (event) => {
   if (quitting) return;
   quitting = true;
   event.preventDefault();
-  Promise.resolve(patManager ? patManager.stop() : null)
+  Promise.all([
+    patManager ? patManager.stop() : null,
+    soundModemManager ? soundModemManager.stopAll() : null
+  ])
     .catch(() => {})
     .finally(() => app.quit());
 });

@@ -64,6 +64,8 @@ contextBridge.exposeInMainWorld('nexdigi', {
   winlinkDisconnect: (dirty) => ipcRenderer.invoke('winlink:disconnect', dirty),
   winlinkSearchRms: (params) => ipcRenderer.invoke('winlink:searchRms', params),
   onWinlinkLog: (cb) => { const l = (_e, line) => cb(line); ipcRenderer.on('winlink-log', l); return () => ipcRenderer.removeListener('winlink-log', l); },
+
+  onSoundModemLog: (cb) => { const l = (_e, payload) => cb(payload); ipcRenderer.on('soundmodem-log', l); return () => ipcRenderer.removeListener('soundmodem-log', l); },
   onWinlinkStatus: (cb) => { const l = (_e, status) => cb(status); ipcRenderer.on('winlink-status', l); return () => ipcRenderer.removeListener('winlink-status', l); },
 
   // BBS (NexDigi server REST)
