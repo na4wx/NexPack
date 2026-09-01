@@ -17,9 +17,16 @@ const WebSocket = require('ws');
 // WS messages land in the new room. Incoming `chat-broadcast` events DO
 // carry `roomName`, so the UI can still filter/group by room correctly.
 class ChatManager extends EventEmitter {
-  constructor({ nexDigiClient }) {
+  // callsignOverride: used to give an inbound RF visitor's own callsign as
+  // their Chat identity (see InboundNodeServer) — a fresh ChatManager
+  // instance per RF session, never the shared one, so a remote visitor's
+  // room/messages/identity can't collide with the local operator's own
+  // Chat UI (that instance has exactly one ws/currentRoom/identity, which
+  // is fine for one local user but wrong for relaying multiple RF guests).
+  constructor({ nexDigiClient, callsignOverride }) {
     super();
     this.nexDigiClient = nexDigiClient;
+    this.callsignOverride = callsignOverride || null;
     this.ws = null;
     this.connected = false;
     this.currentRoom = null;
@@ -38,7 +45,7 @@ class ChatManager extends EventEmitter {
   // accident of them sharing the same server-connection storage. Falls
   // back to the BBS callsign only for settings saved before this existed.
   _chatCallsign(s) {
-    return (s.chatCallsign || s.callsign || '').toUpperCase();
+    return (this.callsignOverride || s.chatCallsign || s.callsign || '').toUpperCase();
   }
 
   connect() {

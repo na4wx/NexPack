@@ -71,10 +71,15 @@ class NexDigiClient {
     return this._request('GET', `/api/bbs/messages${qs ? '?' + qs : ''}`);
   }
 
-  postMessage({ recipient, subject, content, category = 'P', priority = 'N', tags = [], replyTo }) {
+  // senderOverride: lets InboundNodeServer attribute a message posted by an
+  // inbound RF visitor to their own real callsign instead of NexPack's own
+  // configured BBS identity — otherwise every visitor's post would look
+  // like it came from the local operator.
+  postMessage({ recipient, subject, content, category = 'P', priority = 'N', tags = [], replyTo, senderOverride }) {
     const s = this.getSettings();
-    if (!s || !s.callsign) throw new Error('Your callsign is not set in BBS settings');
-    return this._request('POST', '/api/bbs/messages', { json: { sender: s.callsign, recipient, subject, content, category, priority, tags, replyTo } });
+    const sender = senderOverride || (s && s.callsign);
+    if (!sender) throw new Error('Your callsign is not set in BBS settings');
+    return this._request('POST', '/api/bbs/messages', { json: { sender, recipient, subject, content, category, priority, tags, replyTo } });
   }
 
   markRead(messageNumber) { return this._request('PUT', `/api/bbs/messages/${encodeURIComponent(messageNumber)}/read`); }

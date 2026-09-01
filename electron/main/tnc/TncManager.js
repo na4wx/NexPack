@@ -206,7 +206,7 @@ class TncManager extends EventEmitter {
     adapter.on('close', () => this._setStatus(t, 'disconnected'));
     adapter.on('error', (e) => this._setStatus(t, 'error', e));
     if (config.type === 'agwpe') {
-      adapter.on('frame', ({ port, ax25Frame }) => this._handleIncomingAx25(t, this._radioForPort(t, port), ax25Frame));
+      adapter.on('frame', ({ port, ax25Frame }) => this._handleIncomingAx25(t, port, ax25Frame));
       adapter.on('portInfo', (ports) => this.emit('port-info', { tncId: config.id, ports }));
     } else {
       adapter.on('data', (chunk) => this._onRawKissData(t, chunk));
@@ -232,7 +232,7 @@ class TncManager extends EventEmitter {
       const rawFrame = t.rxBuffer.slice(startFend, endFend + 1);
       try {
         for (const { port, frame } of unescapeStream(rawFrame)) {
-          if (frame.length > 0) this._handleIncomingAx25(t, this._radioForPort(t, port), frame);
+          if (frame.length > 0) this._handleIncomingAx25(t, port, frame);
         }
       } catch (e) { /* skip invalid frame */ }
       processed = endFend + 1;
@@ -275,20 +275,37 @@ class TncManager extends EventEmitter {
   }
 
   // ---- inbound frame handling ----
-  _handleIncomingAx25(t, radio, ax25Frame) {
+  // Takes the raw KISS/AGWPE port number rather than a pre-resolved radio —
+  // which radio a frame is "for" can only be known once it's parsed and its
+  // destination callsign-SSID is matched against the radios actually
+  // configured on that port. Picking a radio by port alone (the old
+  // behavior) meant multiple radios sharing one physical port — needed for
+  // giving Terminal/BBS/Chat each their own callsign-SSID on one TNC —
+  // would all resolve to whichever radio happened to be listed first,
+  // regardless of which one a frame was actually addressed to.
+  _handleIncomingAx25(t, portNumber, ax25Frame) {
     let parsed;
     try { parsed = parseAx25Frame(ax25Frame); } catch (e) {
-      this.emit('monitor', { tncId: t.config.id, radioId: radio ? radio.id : null, direction: 'rx', frameType: 'error', timestamp: Date.now(), text: `malformed frame: ${e.message}`, raw: ax25Frame.toString('hex') });
+      this.emit('monitor', { tncId: t.config.id, radioId: null, direction: 'rx', frameType: 'error', timestamp: Date.now(), text: `malformed frame: ${e.message}`, raw: ax25Frame.toString('hex') });
       return;
     }
+    if (!parsed.addresses || parsed.addresses.length < 2) return;
+    const destAddr = parsed.addresses[0];
+    const destCall = destAddr.ssid ? `${destAddr.callsign}-${destAddr.ssid}` : destAddr.callsign;
+    const onThisPort = t.config.radios.filter((r) => (r.portNumber || 0) === portNumber);
+    let radio = onThisPort.find((r) => String(r.callsign || '').toUpperCase() === destCall.toUpperCase());
+    if (!radio) radio = this._radioForPort(t, portNumber); // fallback: monitor display still needs a radio to attribute to
+
     const frameType = classifyControl(parsed.control);
     this._emitMonitor(t, radio, 'rx', frameType, parsed, ax25Frame);
 
-    if (!radio || parsed.addresses.length < 2) return;
-    const destCall = parsed.addresses[0].callsign;
+    if (!radio) return;
     const srcAddr = parsed.addresses[1];
     const srcCall = srcAddr.ssid ? `${srcAddr.callsign}-${srcAddr.ssid}` : srcAddr.callsign;
-    const addressedToUs = destCall.toUpperCase() === String(radio.callsign || '').split('-')[0].toUpperCase();
+    // Full callsign-SSID match now, not just the base callsign — the old
+    // check stripped the SSID off both sides, so two radios differing only
+    // by SSID would both accept every frame addressed to either of them.
+    const addressedToUs = destCall.toUpperCase() === String(radio.callsign || '').toUpperCase();
     if (!addressedToUs) return;
 
     const sessionKey = `${t.config.id}:${radio.id}:${srcCall}`;

@@ -31,7 +31,7 @@ export default function SettingsPage({ tncs, initialTab }) {
         {tab === 'terminal' && <TerminalSettingsPanel tncs={tncs} />}
         {tab === 'bbs' && <BbsSettingsPanel tncs={tncs} />}
         {tab === 'winlink' && <WinlinkSettingsPanel />}
-        {tab === 'chat' && <ChatSettingsPanel />}
+        {tab === 'chat' && <ChatSettingsPanel tncs={tncs} />}
         {tab === 'aprs' && <AprsSettingsPanel tncs={tncs} />}
       </Box>
     </Box>

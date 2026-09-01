@@ -25,7 +25,8 @@ const files = [
   'test_aprs_manager_tx.js',
   'test_aprs_beacon_schedule_crash.js',
   'test_map_tile_cache.js',
-  'test_settings_page_backend.js'
+  'test_settings_page_backend.js',
+  'test_inbound_node_server.js'
 ];
 
 let failed = 0;
