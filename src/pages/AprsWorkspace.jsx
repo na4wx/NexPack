@@ -4,17 +4,14 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   Box, Stack, TextField, List, ListItemButton, ListItemText, Typography, IconButton,
-  Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, Switch, FormControlLabel,
-  MenuItem, Divider, Badge, Tooltip
+  Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, Divider, Badge, Tooltip
 } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PersonIcon from '@mui/icons-material/Person';
 import ChatIcon from '@mui/icons-material/Chat';
 import PlaceIcon from '@mui/icons-material/Place';
 import CloseIcon from '@mui/icons-material/Close';
-import StorageIcon from '@mui/icons-material/Storage';
 import CachedOsmTileLayer from '../aprs/CachedOsmTileLayer';
-import MapCacheSettingsDialog from '../components/MapCacheSettingsDialog';
 import { getStationIconHtml, GLYPHS } from '../aprs/aprsIcons';
 
 const STALE_MS = 30 * 60 * 1000; // 30 minutes — matches typical real-client defaults (UI-View etc.)
@@ -30,8 +27,6 @@ function objectIcon(symbol) {
 
 function isStale(lastSeen) { return Date.now() - lastSeen > STALE_MS; }
 
-function radioLabel(tnc, radio) { return `${radio.callsign} · ${tnc.name}`; }
-
 function distanceLabel(s) {
   if (s.distanceMiles === undefined) return null;
   return `${s.distanceMiles.toFixed(1)} mi @ ${Math.round(s.bearing)}°`;
@@ -43,66 +38,6 @@ function RecenterOnSelect({ station }) {
     if (station && station.lastPosition) map.setView([station.lastPosition.lat, station.lastPosition.lon], Math.max(map.getZoom(), 10));
   }, [station, map]);
   return null;
-}
-
-function AprsSettingsDialog({ open, onClose, onSaved }) {
-  const [enabled, setEnabled] = useState(false);
-  const [host, setHost] = useState('noam.aprs2.net');
-  const [port, setPort] = useState(14580);
-  const [callsign, setCallsign] = useState('');
-  const [passcode, setPasscode] = useState('-1');
-  const [filter, setFilter] = useState('');
-  const [txPasscode, setTxPasscode] = useState('');
-
-  useEffect(() => {
-    if (!open) return;
-    window.nexdigi.aprsGetSettings().then((s) => {
-      const cfg = (s && s.aprsIs) || {};
-      setEnabled(!!cfg.enabled);
-      setHost(cfg.host || 'noam.aprs2.net');
-      setPort(cfg.port || 14580);
-      setCallsign(cfg.callsign || '');
-      setPasscode(cfg.passcode || '-1');
-      setFilter(cfg.filter || '');
-      setTxPasscode(cfg.txPasscode || '');
-    });
-  }, [open]);
-
-  const submit = async () => {
-    await window.nexdigi.aprsSaveSettings({ aprsIs: { enabled, host: host.trim(), port: Number(port), callsign: callsign.trim(), passcode: passcode.trim() || '-1', filter: filter.trim(), txPasscode: txPasscode.trim() } });
-    onSaved();
-    onClose();
-  };
-
-  return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>APRS-IS settings</DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          <Typography variant="body2" color="text.secondary">
-            RF monitoring works automatically with no settings — any UI frame heard on a configured radio is checked for APRS content. APRS-IS below is optional and off by default.
-          </Typography>
-          <FormControlLabel control={<Switch checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />} label="Connect to APRS-IS" />
-          <TextField label="Host" value={host} onChange={(e) => setHost(e.target.value)} disabled={!enabled} />
-          <TextField label="Port" type="number" value={port} onChange={(e) => setPort(e.target.value)} disabled={!enabled} />
-          <TextField label="Your callsign" value={callsign} onChange={(e) => setCallsign(e.target.value)} placeholder="N0CALL-1" disabled={!enabled} />
-          <TextField
-            label="Receive passcode" value={passcode} onChange={(e) => setPasscode(e.target.value)} disabled={!enabled}
-            helperText="-1 = receive-only (no transmit/gate), the default. Enter your real passcode only if you have one."
-          />
-          <TextField label="Filter (optional)" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="r/33.5/-96.5/50" disabled={!enabled} />
-          <TextField
-            label="Transmit passcode (optional)" value={txPasscode} onChange={(e) => setTxPasscode(e.target.value)} disabled={!enabled}
-            helperText="Only needed if you also want beacons/messages gated to APRS-IS. Leave blank to transmit RF-only."
-          />
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={submit}>Save</Button>
-      </DialogActions>
-    </Dialog>
-  );
 }
 
 function SymbolPicker({ value, onChange }) {
@@ -121,116 +56,6 @@ function SymbolPicker({ value, onChange }) {
         </Tooltip>
       ))}
     </Box>
-  );
-}
-
-function MyStationDialog({ open, onClose, onSaved, tncs }) {
-  const [mycall, setMycall] = useState('');
-  const [symbol, setSymbol] = useState('/>');
-  const [comment, setComment] = useState('');
-  const [lat, setLat] = useState('');
-  const [lon, setLon] = useState('');
-  const [beaconEnabled, setBeaconEnabled] = useState(false);
-  const [interval_, setInterval_] = useState(30);
-  const [pathStr, setPathStr] = useState('WIDE1-1,WIDE2-1');
-  const [radioKey, setRadioKey] = useState('');
-  const [error, setError] = useState('');
-
-  const radios = useMemo(() => {
-    const list = [];
-    for (const tnc of tncs || []) for (const r of tnc.radios) list.push({ key: `${tnc.id}:${r.id}`, tncId: tnc.id, radioId: r.id, tnc, radio: r });
-    return list;
-  }, [tncs]);
-
-  useEffect(() => {
-    if (!open) return;
-    setError('');
-    window.nexdigi.aprsGetMyStation().then((my) => {
-      setMycall(my.mycall || '');
-      setSymbol(my.symbol || '/>');
-      setComment(my.comment || '');
-      setLat(my.homePosition ? String(my.homePosition.lat) : '');
-      setLon(my.homePosition ? String(my.homePosition.lon) : '');
-      const beacon = my.beacon || {};
-      setBeaconEnabled(!!beacon.enabled);
-      setInterval_(beacon.intervalMinutes || 30);
-      setPathStr(beacon.path || 'WIDE1-1,WIDE2-1');
-      setRadioKey(beacon.tncId && beacon.radioId ? `${beacon.tncId}:${beacon.radioId}` : '');
-    });
-  }, [open]);
-
-  const saveMyStation = async () => {
-    const r = radios.find((x) => x.key === radioKey);
-    const homePosition = (lat.trim() && lon.trim()) ? { lat: Number(lat), lon: Number(lon) } : null;
-    await window.nexdigi.aprsSaveMyStation({
-      mycall: mycall.trim().toUpperCase(),
-      symbol,
-      comment: comment.trim(),
-      homePosition,
-      beacon: { enabled: beaconEnabled, intervalMinutes: Number(interval_) || 30, path: pathStr.trim(), tncId: r ? r.tncId : null, radioId: r ? r.radioId : null }
-    });
-  };
-
-  const submit = async () => {
-    setError('');
-    try {
-      await saveMyStation();
-      onSaved();
-      onClose();
-    } catch (e) {
-      setError(e.message || String(e));
-    }
-  };
-
-  const beaconNow = async () => {
-    setError('');
-    // Save first, then beacon — and only close the dialog once BOTH have
-    // actually succeeded. Previously this called submit() (which closes
-    // the dialog immediately) before beaconing, so an error from a missing
-    // mycall/home-position had nowhere to display — the dialog was already
-    // gone by the time the beacon call failed, making the button appear to
-    // silently do nothing.
-    try {
-      await saveMyStation();
-      await window.nexdigi.aprsBeaconNow();
-      onSaved();
-      onClose();
-    } catch (e) {
-      setError(e.message || String(e));
-    }
-  };
-
-  return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>My Station</DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          <TextField label="Callsign" value={mycall} onChange={(e) => setMycall(e.target.value)} placeholder="N0CALL-9" />
-          <Typography variant="caption" color="text.secondary">Symbol</Typography>
-          <SymbolPicker value={symbol} onChange={setSymbol} />
-          <TextField label="Comment" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="NexPack" />
-          <Stack direction="row" spacing={1}>
-            <TextField label="Home latitude" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="39.8000" />
-            <TextField label="Home longitude" value={lon} onChange={(e) => setLon(e.target.value)} placeholder="-98.6000" />
-          </Stack>
-          <Divider />
-          <FormControlLabel control={<Switch checked={beaconEnabled} onChange={(e) => setBeaconEnabled(e.target.checked)} />} label="Periodic beacon" />
-          <TextField label="Interval (minutes)" type="number" value={interval_} onChange={(e) => setInterval_(e.target.value)} disabled={!beaconEnabled} />
-          <TextField label="Path" value={pathStr} onChange={(e) => setPathStr(e.target.value)} disabled={!beaconEnabled} />
-          <TextField select label="Radio" value={radioKey} onChange={(e) => setRadioKey(e.target.value)}>
-            {radios.length === 0 && <MenuItem value="" disabled>No radios configured</MenuItem>}
-            {radios.map((r) => <MenuItem key={r.key} value={r.key}>{radioLabel(r.tnc, r.radio)}</MenuItem>)}
-          </TextField>
-          {error && <Typography variant="body2" color="error">{error}</Typography>}
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={beaconNow}>Beacon now</Button>
-        <Box sx={{ flexGrow: 1 }} />
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={async () => { await submit(); }}>Save</Button>
-      </DialogActions>
-    </Dialog>
   );
 }
 
@@ -442,14 +267,11 @@ function StationDetailPanel({ station, onClose, onMessage }) {
   );
 }
 
-export default function AprsWorkspace({ tncs }) {
+export default function AprsWorkspace({ onOpenSettings }) {
   const [stations, setStations] = useState({});
   const [objects, setObjects] = useState({});
   const [selectedCallsign, setSelectedCallsign] = useState(null);
   const [search, setSearch] = useState('');
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [mapCacheOpen, setMapCacheOpen] = useState(false);
-  const [myStationOpen, setMyStationOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [objectsOpen, setObjectsOpen] = useState(false);
   const [messageTarget, setMessageTarget] = useState('');
@@ -507,15 +329,14 @@ export default function AprsWorkspace({ tncs }) {
         <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 1 }}>
           <Chip size="small" label={aprsIsConnected ? 'APRS-IS connected' : 'APRS-IS off'} color={aprsIsConnected ? 'success' : 'default'} />
           <Box sx={{ flexGrow: 1 }} />
-          <Tooltip title="My Station"><IconButton size="small" onClick={() => setMyStationOpen(true)}><PersonIcon fontSize="small" /></IconButton></Tooltip>
+          <Tooltip title="My Station"><IconButton size="small" onClick={() => onOpenSettings('aprs')}><PersonIcon fontSize="small" /></IconButton></Tooltip>
           <Tooltip title="Messages">
             <IconButton size="small" onClick={() => openMessages('')}>
               <Badge badgeContent={unread} color="error"><ChatIcon fontSize="small" /></Badge>
             </IconButton>
           </Tooltip>
           <Tooltip title="Objects"><IconButton size="small" onClick={() => setObjectsOpen(true)}><PlaceIcon fontSize="small" /></IconButton></Tooltip>
-          <Tooltip title="Map cache"><IconButton size="small" onClick={() => setMapCacheOpen(true)}><StorageIcon fontSize="small" /></IconButton></Tooltip>
-          <Tooltip title="APRS-IS settings"><IconButton size="small" onClick={() => setSettingsOpen(true)}><SettingsIcon fontSize="small" /></IconButton></Tooltip>
+          <Tooltip title="APRS settings"><IconButton size="small" onClick={() => onOpenSettings('aprs')}><SettingsIcon fontSize="small" /></IconButton></Tooltip>
         </Stack>
         <TextField size="small" placeholder="Search callsign…" value={search} onChange={(e) => setSearch(e.target.value)} sx={{ mx: 1, mb: 1 }} />
         <List dense sx={{ overflowY: 'auto', flexGrow: 1 }}>
@@ -571,9 +392,6 @@ export default function AprsWorkspace({ tncs }) {
         <StationDetailPanel station={selected} onClose={() => setSelectedCallsign(null)} onMessage={openMessages} />
       )}
 
-      <AprsSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={() => {}} />
-      <MapCacheSettingsDialog open={mapCacheOpen} onClose={() => setMapCacheOpen(false)} />
-      <MyStationDialog open={myStationOpen} onClose={() => setMyStationOpen(false)} onSaved={() => window.nexdigi.aprsGetMyStation().then((my) => setHomePosition(my.homePosition || null))} tncs={tncs} />
       <MessagesDialog open={messagesOpen} onClose={() => setMessagesOpen(false)} initialTarget={messageTarget} />
       <ObjectsDialog open={objectsOpen} onClose={() => setObjectsOpen(false)} />
     </Box>

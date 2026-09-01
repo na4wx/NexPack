@@ -5,12 +5,14 @@ import RouterIcon from '@mui/icons-material/Router';
 import MailIcon from '@mui/icons-material/MailOutline';
 import ChatIcon from '@mui/icons-material/ChatBubbleOutline';
 import MapIcon from '@mui/icons-material/MapOutlined';
+import SettingsIcon from '@mui/icons-material/Settings';
 import { useTncs } from './hooks/useTncs';
 import TerminalWorkspace from './pages/TerminalWorkspace';
 import TncManagerPage from './pages/TncManagerPage';
 import MailWorkspace from './pages/MailWorkspace';
 import ChatWorkspace from './pages/ChatWorkspace';
 import AprsWorkspace from './pages/AprsWorkspace';
+import SettingsPage from './pages/SettingsPage';
 
 const RAIL_WIDTH = 76;
 
@@ -24,7 +26,12 @@ const NAV_ITEMS = [
 
 export default function App() {
   const [page, setPage] = useState('terminal');
+  const [settingsTab, setSettingsTab] = useState('terminal');
   const { tncs, refresh } = useTncs();
+
+  // Each workspace's own settings icon calls this to jump straight to its
+  // tab in the unified Settings screen, instead of opening its own dialog.
+  const openSettings = (tab) => { setSettingsTab(tab); setPage('settings'); };
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
@@ -58,14 +65,31 @@ export default function App() {
             </Tooltip>
           ))}
         </List>
+        <Box sx={{ flexGrow: 1 }} />
+        <List sx={{ width: '100%' }}>
+          <Tooltip title="Settings" placement="right">
+            <span>
+              <ListItemButton
+                selected={page === 'settings'}
+                onClick={() => setPage('settings')}
+                sx={{ flexDirection: 'column', py: 1.5, mx: 1, borderRadius: 2 }}
+              >
+                <ListItemIcon sx={{ minWidth: 0, color: page === 'settings' ? 'primary.main' : 'text.secondary' }}>
+                  <SettingsIcon />
+                </ListItemIcon>
+              </ListItemButton>
+            </span>
+          </Tooltip>
+        </List>
       </Drawer>
 
       <Box sx={{ flexGrow: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
-        {page === 'terminal' && <TerminalWorkspace tncs={tncs} />}
+        {page === 'terminal' && <TerminalWorkspace tncs={tncs} onOpenSettings={openSettings} />}
         {page === 'tncs' && <TncManagerPage tncs={tncs} onChange={refresh} />}
-        {page === 'winlink' && <MailWorkspace tncs={tncs} />}
-        {page === 'chat' && <ChatWorkspace />}
-        {page === 'aprs' && <AprsWorkspace tncs={tncs} />}
+        {page === 'winlink' && <MailWorkspace tncs={tncs} onOpenSettings={openSettings} />}
+        {page === 'chat' && <ChatWorkspace onOpenSettings={openSettings} />}
+        {page === 'aprs' && <AprsWorkspace onOpenSettings={openSettings} />}
+        {page === 'settings' && <SettingsPage tncs={tncs} initialTab={settingsTab} />}
       </Box>
     </Box>
   );

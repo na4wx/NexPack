@@ -6,11 +6,10 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import MessageList from '../components/MessageList';
 import MessageReadPane from '../components/MessageReadPane';
 import ComposeDialog from '../components/ComposeDialog';
-import BbsSettingsDialog from '../components/BbsSettingsDialog';
 
 const CATEGORY_LABEL = { P: 'Personal', B: 'Bulletin', T: 'Traffic', E: 'Emergency', A: 'Admin' };
 
-export default function BbsMail({ tncs }) {
+export default function BbsMail({ tncs, onOpenSettings }) {
   const [configured, setConfigured] = useState(null);
   const [transport, setTransport] = useState('http');
   const [view, setView] = useState('messages'); // 'messages' | 'bulletins'
@@ -18,7 +17,6 @@ export default function BbsMail({ tncs }) {
   const [bulletins, setBulletins] = useState([]);
   const [selected, setSelected] = useState(null);
   const [composeOpen, setComposeOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [loadError, setLoadError] = useState(null);
 
   const boot = async () => {
@@ -75,8 +73,7 @@ export default function BbsMail({ tncs }) {
         <Typography color="text.secondary" sx={{ mb: 2 }}>
           BBS messages live on your NexDigi digipeater — connect over the internet or directly over RF to read and post them.
         </Typography>
-        <Button variant="contained" onClick={() => setSettingsOpen(true)}>BBS settings</Button>
-        <BbsSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} tncs={tncs} />
+        <Button variant="contained" onClick={() => onOpenSettings('bbs')}>BBS settings</Button>
       </Box>
     );
   }
@@ -89,7 +86,7 @@ export default function BbsMail({ tncs }) {
         <Chip size="small" label={transport === 'rf' ? 'Radio (RF)' : 'Internet'} color={transport === 'rf' ? 'success' : 'default'} />
         <Box sx={{ flexGrow: 1 }} />
         {loadError && <Chip size="small" color="error" label={loadError} />}
-        <IconButton size="small" onClick={() => setSettingsOpen(true)}><SettingsIcon fontSize="small" /></IconButton>
+        <IconButton size="small" onClick={() => onOpenSettings('bbs')}><SettingsIcon fontSize="small" /></IconButton>
       </Stack>
 
       <Tabs value={view} onChange={(_e, v) => { setView(v); setSelected(null); }} sx={{ borderBottom: 1, borderColor: 'divider', minHeight: 36 }}>
@@ -133,7 +130,6 @@ export default function BbsMail({ tncs }) {
         subjectDisabled={transport === 'rf'}
         subjectHelperText={transport === 'rf' ? 'RF-sent messages are always stored with subject "BBS Message" — this field is ignored over radio.' : null}
       />
-      <BbsSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} tncs={tncs} />
     </Box>
   );
 }

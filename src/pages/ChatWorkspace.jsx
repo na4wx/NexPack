@@ -6,7 +6,6 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import SettingsIcon from '@mui/icons-material/Settings';
 import SendIcon from '@mui/icons-material/Send';
-import NexDigiServerSettingsDialog from '../components/NexDigiServerSettingsDialog';
 
 function CreateRoomDialog({ open, onClose, onCreated }) {
   const [name, setName] = useState('');
@@ -34,7 +33,7 @@ function CreateRoomDialog({ open, onClose, onCreated }) {
   );
 }
 
-export default function ChatWorkspace() {
+export default function ChatWorkspace({ onOpenSettings }) {
   const [configured, setConfigured] = useState(null);
   const [connected, setConnected] = useState(false);
   const [rooms, setRooms] = useState([]);
@@ -42,7 +41,6 @@ export default function ChatWorkspace() {
   const [messagesByRoom, setMessagesByRoom] = useState({});
   const [users, setUsers] = useState([]);
   const [input, setInput] = useState('');
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [createRoomOpen, setCreateRoomOpen] = useState(false);
   const [error, setError] = useState(null);
   const scrollRef = useRef(null);
@@ -157,8 +155,7 @@ export default function ChatWorkspace() {
         <Typography color="text.secondary" sx={{ mb: 2 }}>
           Chat runs on your NexDigi digipeater — add its address and password to join rooms.
         </Typography>
-        <Button variant="contained" onClick={() => setSettingsOpen(true)}>NexDigi server settings</Button>
-        <NexDigiServerSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} />
+        <Button variant="contained" onClick={() => onOpenSettings('chat')}>Chat settings</Button>
       </Box>
     );
   }
@@ -170,7 +167,7 @@ export default function ChatWorkspace() {
           <Chip size="small" label={connected ? 'connected' : 'offline'} color={connected ? 'success' : 'default'} sx={{ mr: 1 }} />
           <Box sx={{ flexGrow: 1 }} />
           <IconButton size="small" onClick={() => setCreateRoomOpen(true)}><AddIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => setSettingsOpen(true)}><SettingsIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => onOpenSettings('chat')}><SettingsIcon fontSize="small" /></IconButton>
         </Stack>
         <List dense sx={{ overflowY: 'auto' }}>
           {rooms.map((r) => (
@@ -219,7 +216,6 @@ export default function ChatWorkspace() {
         </List>
       </Box>
 
-      <NexDigiServerSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} />
       <CreateRoomDialog open={createRoomOpen} onClose={() => setCreateRoomOpen(false)} onCreated={refreshRooms} />
     </Box>
   );

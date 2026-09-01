@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Stack, Tabs, Tab, IconButton, TextField, MenuItem, Button, Typography } from '@mui/material';
+import { Box, Stack, Tabs, Tab, IconButton, TextField, MenuItem, Button, Typography, Tooltip } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CallMadeIcon from '@mui/icons-material/CallMade';
 import CodeIcon from '@mui/icons-material/Code';
+import SettingsIcon from '@mui/icons-material/Settings';
 import MonitorPane from '../components/MonitorPane';
 import SessionPane from '../components/SessionPane';
 import ScriptEditorDialog from '../components/ScriptEditorDialog';
@@ -27,7 +28,7 @@ function normalizeLineEndings(text) {
   return text.replace(/\r\n?/g, '\n');
 }
 
-export default function TerminalWorkspace({ tncs }) {
+export default function TerminalWorkspace({ tncs, onOpenSettings }) {
   const [monitorEvents, setMonitorEvents] = useState([]);
   const [tabs, setTabs] = useState([{ key: 'all', kind: 'monitor', label: 'All traffic', radioId: null, tncId: null }]);
   const [activeTab, setActiveTab] = useState('all');
@@ -51,6 +52,15 @@ export default function TerminalWorkspace({ tncs }) {
   }, [tncs]);
 
   const loadScripts = () => window.nexdigi.listScripts().then(setScripts);
+
+  // Default radio/path from Settings — a one-time pre-fill on mount, not a
+  // hard lock, so the toolbar controls stay exactly as overridable as before.
+  useEffect(() => {
+    window.nexdigi.terminalGetSettings().then((s) => {
+      if (s.defaultTncId && s.defaultRadioId) setSelectedRadioKey(`${s.defaultTncId}:${s.defaultRadioId}`);
+      if (s.defaultDigiPath) setConnectPath(s.defaultDigiPath);
+    });
+  }, []);
 
   useEffect(() => {
     loadScripts();
@@ -188,6 +198,8 @@ export default function TerminalWorkspace({ tncs }) {
         <Button size="small" variant="contained" startIcon={<CallMadeIcon />} disabled={!selectedRadioKey || !connectCall.trim()} onClick={openSession}>
           Connect
         </Button>
+        <Box sx={{ flexGrow: 1 }} />
+        <Tooltip title="Terminal settings"><IconButton size="small" onClick={() => onOpenSettings('terminal')}><SettingsIcon fontSize="small" /></IconButton></Tooltip>
       </Stack>
 
       <Tabs

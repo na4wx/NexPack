@@ -116,6 +116,8 @@ contextBridge.exposeInMainWorld('nexdigi', {
   getMapCacheInfo: () => ipcRenderer.invoke('maps:getCacheInfo'),
   setMapCacheBudget: (bytes) => ipcRenderer.invoke('maps:setCacheBudget', bytes),
   clearMapCache: () => ipcRenderer.invoke('maps:clearCache'),
+  terminalGetSettings: () => ipcRenderer.invoke('terminal:getSettings'),
+  terminalSaveSettings: (settings) => ipcRenderer.invoke('terminal:saveSettings', settings),
   onAprsStation: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-station', l); return () => ipcRenderer.removeListener('aprs-station', l); },
   onAprsIsStatus: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-is-status', l); return () => ipcRenderer.removeListener('aprs-is-status', l); },
   onAprsMessage: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-message', l); return () => ipcRenderer.removeListener('aprs-message', l); },

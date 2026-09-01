@@ -5,8 +5,10 @@ const WebSocket = require('ws');
 // (server/routes/chat.js + the shared WebSocket in server/index.js).
 // Unlike Winlink, chat genuinely lives on the digipeater - NexPack is a
 // pure client here, the same way BBS is. Reuses the SAME NexDigiClient
-// (host/password/callsign) rather than asking the user to configure the
-// same server connection twice.
+// (host/password) as BBS rather than asking the user to configure the same
+// server connection twice — but Chat's own callsign (chatCallsign, see
+// _chatCallsign() below) is deliberately independent of BBS's, since
+// there's no real reason those two identities need to match.
 //
 // Real API nuance (verified against current NexDigi source, not assumed):
 // `chat-message` sends carry no room - the server tracks a per-callsign
@@ -31,6 +33,14 @@ class ChatManager extends EventEmitter {
     return s;
   }
 
+  // Chat has its own identity (chatCallsign) distinct from BBS's callsign —
+  // sharing one callsign for both was never a real requirement, just an
+  // accident of them sharing the same server-connection storage. Falls
+  // back to the BBS callsign only for settings saved before this existed.
+  _chatCallsign(s) {
+    return (s.chatCallsign || s.callsign || '').toUpperCase();
+  }
+
   connect() {
     if (this.ws) return;
     this._closed = false;
@@ -39,7 +49,7 @@ class ChatManager extends EventEmitter {
     this.ws = new WebSocket(`${wsProtocol}://${s.host}?password=${encodeURIComponent(s.password || '')}`);
 
     this.ws.on('open', () => {
-      this.ws.send(JSON.stringify({ type: 'chat-connect', callsign: (s.callsign || '').toUpperCase() }));
+      this.ws.send(JSON.stringify({ type: 'chat-connect', callsign: this._chatCallsign(s) }));
     });
     this.ws.on('message', (data) => {
       let msg;
@@ -91,8 +101,8 @@ class ChatManager extends EventEmitter {
 
   async switchRoom(name) {
     const s = this._settings();
-    const callsign = (s.callsign || '').toUpperCase();
-    if (!callsign) throw new Error('Your callsign is not set in NexDigi server settings');
+    const callsign = this._chatCallsign(s);
+    if (!callsign) throw new Error('Your callsign is not set in Chat settings');
     if (this.currentRoom && this.currentRoom !== name) {
       await this._request('POST', `/api/chat/rooms/${encodeURIComponent(this.currentRoom)}/leave`, { json: { callsign } }).catch(() => {});
     }

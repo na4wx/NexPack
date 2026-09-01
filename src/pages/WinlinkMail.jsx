@@ -7,7 +7,6 @@ import CallEndIcon from '@mui/icons-material/CallEnd';
 import MessageList from '../components/MessageList';
 import MessageReadPane from '../components/MessageReadPane';
 import ComposeDialog from '../components/ComposeDialog';
-import WinlinkSettingsDialog from '../components/WinlinkSettingsDialog';
 
 const FOLDERS = [
   { key: 'in', label: 'Inbox' },
@@ -16,7 +15,7 @@ const FOLDERS = [
   { key: 'archive', label: 'Archive' }
 ];
 
-export default function WinlinkMail() {
+export default function WinlinkMail({ onOpenSettings }) {
   const [configured, setConfigured] = useState(null); // null = unknown yet
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState(null);
@@ -24,7 +23,6 @@ export default function WinlinkMail() {
   const [messages, setMessages] = useState([]);
   const [selected, setSelected] = useState(null);
   const [composeOpen, setComposeOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [aliases, setAliases] = useState({});
   const [connectAlias, setConnectAlias] = useState('');
   const [connecting, setConnecting] = useState(false);
@@ -105,8 +103,7 @@ export default function WinlinkMail() {
         <Typography color="text.secondary" sx={{ mb: 2 }}>
           Add your callsign and Winlink account to start sending and receiving real Winlink email.
         </Typography>
-        <Button variant="contained" onClick={() => setSettingsOpen(true)}>Winlink settings</Button>
-        <WinlinkSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} />
+        <Button variant="contained" onClick={() => onOpenSettings('winlink')}>Winlink settings</Button>
       </Box>
     );
   }
@@ -127,7 +124,7 @@ export default function WinlinkMail() {
         </Button>
         <Box sx={{ flexGrow: 1 }} />
         {starting && <Chip size="small" label="Starting pat…" />}
-        <IconButton size="small" onClick={() => setSettingsOpen(true)}><SettingsIcon fontSize="small" /></IconButton>
+        <IconButton size="small" onClick={() => onOpenSettings('winlink')}><SettingsIcon fontSize="small" /></IconButton>
       </Stack>
 
       {startError && <Alert severity="error" sx={{ m: 1 }}>{startError}</Alert>}
@@ -176,7 +173,6 @@ export default function WinlinkMail() {
         initialTo={selected ? selected.From.Addr : ''}
         initialSubject={selected ? `Re: ${selected.Subject}` : ''}
       />
-      <WinlinkSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={boot} />
     </Box>
   );
 }

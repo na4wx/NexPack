@@ -9,6 +9,7 @@ const BbsFacade = require('./bbs/BbsFacade');
 const ChatManager = require('./chat/ChatManager');
 const AprsManager = require('./aprs/AprsManager');
 const MapTileCache = require('./maps/MapTileCache');
+const TerminalSettings = require('./settings/TerminalSettings');
 
 let mainWindow;
 let tncManager;
@@ -20,6 +21,7 @@ let bbsFacade;
 let chatManager;
 let aprsManager;
 let mapTileCache;
+let terminalSettings;
 
 function forwardToRenderer(eventName) {
   tncManager.on(eventName, (payload) => {
@@ -57,6 +59,7 @@ app.whenReady().then(() => {
   chatManager = new ChatManager({ nexDigiClient });
   aprsManager = new AprsManager({ userDataDir: app.getPath('userData'), tncManager });
   mapTileCache = new MapTileCache({ userDataDir: app.getPath('userData') });
+  terminalSettings = new TerminalSettings({ userDataDir: app.getPath('userData') });
 
   // TncManager only emits its own 'error' (as opposed to per-adapter errors,
   // which it already absorbs itself) when persisting tncs.json fails — rare,
@@ -199,6 +202,9 @@ app.whenReady().then(() => {
   ipcMain.handle('maps:getCacheInfo', () => mapTileCache.getCacheInfo());
   ipcMain.handle('maps:setCacheBudget', (_e, bytes) => mapTileCache.setBudget(bytes));
   ipcMain.handle('maps:clearCache', () => mapTileCache.clear());
+
+  ipcMain.handle('terminal:getSettings', () => terminalSettings.getSettings());
+  ipcMain.handle('terminal:saveSettings', (_e, settings) => terminalSettings.saveSettings(settings));
 
   createWindow();
 

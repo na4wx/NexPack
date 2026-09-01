@@ -15,8 +15,21 @@ class NexDigiClient {
     try { return JSON.parse(fs.readFileSync(this.configPath, 'utf8')); } catch (e) { return null; }
   }
 
-  saveSettings({ host, password, callsign, protocol = 'http' }) {
-    const settings = { host, password, callsign: (callsign || '').toUpperCase(), protocol };
+  // Merges over the existing settings rather than replacing wholesale —
+  // BBS and Chat each save independently (BBS's own callsign vs Chat's
+  // chatCallsign, sharing the same host/password as one NexDigi server
+  // connection), and a full replace from either one would silently wipe
+  // out whatever the other had just set.
+  saveSettings({ host, password, callsign, chatCallsign, protocol = 'http' }) {
+    const existing = this.getSettings() || {};
+    const settings = {
+      ...existing,
+      host: host !== undefined ? host : existing.host,
+      password: password !== undefined ? password : existing.password,
+      callsign: callsign !== undefined ? (callsign || '').toUpperCase() : existing.callsign,
+      chatCallsign: chatCallsign !== undefined ? (chatCallsign || '').toUpperCase() : existing.chatCallsign,
+      protocol
+    };
     fs.writeFileSync(this.configPath, JSON.stringify(settings, null, 2));
     return settings;
   }
