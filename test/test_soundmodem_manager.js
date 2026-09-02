@@ -83,6 +83,30 @@ async function main() {
     assert.ok(/^PTT \/dev\/ttyUSB0 RTS$/m.test(conf));
   });
 
+  await test('_readAlsaCards() parses real-shaped /proc/asound/cards content into Direwolf-acceptable device tokens', () => {
+    const mgr = new SoundModemManager({ userDataDir: dir });
+    const sample = ' 0 [PCH            ]: HDA-Intel - HDA Intel PCH\n'
+      + '                      HDA Intel PCH at 0xf7240000 irq 32\n'
+      + ' 1 [USB            ]: USB-Audio - USB Audio CODEC\n'
+      + '                      Generic USB Audio CODEC at usb-0000:00:14.0-1, full speed\n';
+    const origRead = fs.readFileSync;
+    fs.readFileSync = (p, enc) => (p === '/proc/asound/cards' ? sample : origRead(p, enc));
+    let cards;
+    try { cards = mgr._readAlsaCards(); } finally { fs.readFileSync = origRead; }
+    assert.deepStrictEqual(cards.map((c) => c.name), ['plughw:CARD=PCH,DEV=0', 'plughw:CARD=USB,DEV=0']);
+    assert.ok(cards[0].label.includes('HDA Intel PCH'));
+    assert.ok(cards[1].label.includes('USB Audio CODEC'));
+  });
+
+  await test('_readAlsaCards() returns an empty list rather than throwing when /proc/asound/cards does not exist', () => {
+    const mgr = new SoundModemManager({ userDataDir: dir });
+    const origRead = fs.readFileSync;
+    fs.readFileSync = (p, enc) => { if (p === '/proc/asound/cards') throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return origRead(p, enc); };
+    let cards;
+    try { cards = mgr._readAlsaCards(); } finally { fs.readFileSync = origRead; }
+    assert.deepStrictEqual(cards, []);
+  });
+
   await test('a missing direwolf binary rejects startFor() with a clear message instead of crashing', async () => {
     const mgr = new SoundModemManager({ userDataDir: dir });
     process.env.NEXPACK_DIREWOLF_PATH = '/definitely/does/not/exist/direwolf-binary';
@@ -165,6 +189,37 @@ async function main() {
     // Cached: a second call should not re-spawn direwolf.
     const result2 = await mgr._probeDefaultDevices(realBin);
     assert.strictEqual(result2, result, 'expected the cached result to be reused');
+  });
+
+  await test('listAudioDevices() against the real bundled direwolf, if any: returns real, selectable device names', async () => {
+    if (process.platform !== 'darwin') {
+      console.log(`  (skipped — device enumeration only implemented for darwin in this test's platform, got ${process.platform})`);
+      return;
+    }
+    const realBin = path.join(__dirname, '..', 'direwolf', process.platform, process.arch, 'direwolf');
+    if (!fs.existsSync(realBin)) {
+      console.log('  (skipped — no direwolf built for this platform/arch)');
+      return;
+    }
+    const mgr = new SoundModemManager({ userDataDir: dir, resourcesPath: path.join(__dirname, '..') });
+    const devices = await mgr.listAudioDevices();
+    assert.ok(devices.inputs.length > 0, 'expected at least one real input device (the built-in mic, if nothing else)');
+    assert.ok(devices.outputs.length > 0, 'expected at least one real output device (the built-in speakers, if nothing else)');
+    assert.ok(devices.inputs.some((d) => d.isDefault), 'expected exactly one input flagged as the system default');
+    assert.ok(devices.outputs.some((d) => d.isDefault), 'expected exactly one output flagged as the system default');
+
+    // Prove these are names Direwolf will genuinely accept, not just
+    // plausible-looking strings: start it for real against the detected
+    // default input, quoted through the same _buildConfig path startFor()
+    // uses, and confirm its KISS port actually opens.
+    const defaultInput = devices.inputs.find((d) => d.isDefault).name;
+    const defaultOutput = devices.outputs.find((d) => d.isDefault).name;
+    const { port } = await mgr.startFor('list-devices-tnc', { audioInputDevice: defaultInput, audioOutputDevice: defaultOutput, pttMethod: 'none', callsign: 'N0CALL' });
+    await new Promise((resolve, reject) => {
+      const sock = net.createConnection({ host: '127.0.0.1', port }, () => { sock.end(); resolve(); });
+      sock.on('error', reject);
+    });
+    await mgr.stopFor('list-devices-tnc');
   });
 
   await test('_reservePort() always returns a port Direwolf actually accepts (<= 49151)', async () => {

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, MenuItem, Stack, Alert
+  Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, MenuItem, Stack, Alert, Autocomplete
 } from '@mui/material';
 
 const TYPE_LABELS = {
@@ -30,10 +30,14 @@ export default function AddTncDialog({ open, onClose, onCreated }) {
   const [audioOutputDevice, setAudioOutputDevice] = useState('');
   const [pttMethod, setPttMethod] = useState('vox');
   const [pttDevice, setPttDevice] = useState('');
+  const [audioDevices, setAudioDevices] = useState({ inputs: [], outputs: [] });
 
   useEffect(() => {
     if (open && (type === 'serial' || type === 'soundmodem')) {
       window.nexdigi.listSerialPorts().then(setSerialPorts);
+    }
+    if (open && type === 'soundmodem') {
+      window.nexdigi.listSoundModemAudioDevices().then(setAudioDevices).catch(() => setAudioDevices({ inputs: [], outputs: [] }));
     }
   }, [open, type]);
 
@@ -82,19 +86,49 @@ export default function AddTncDialog({ open, onClose, onCreated }) {
             </>
           ) : type === 'soundmodem' ? (
             <>
-              <TextField
-                label="Audio input device (optional)"
+              <Autocomplete
+                freeSolo
+                options={audioDevices.inputs.map((d) => d.name)}
                 value={audioInputDevice}
-                onChange={(e) => setAudioInputDevice(e.target.value)}
-                placeholder="System default"
-                helperText="Leave blank to use your system's default microphone/input. Otherwise enter the exact device name Direwolf expects for your OS."
+                onInputChange={(e, v) => setAudioInputDevice(v)}
+                renderOption={(props, opt) => {
+                  const d = audioDevices.inputs.find((x) => x.name === opt);
+                  return <li {...props}>{opt}{d && d.isDefault ? ' (system default)' : ''}</li>;
+                }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Audio input device (optional)"
+                    placeholder="System default"
+                    helperText={
+                      audioDevices.inputs.length > 0
+                        ? "Leave blank to use your system's default microphone/input."
+                        : "Leave blank for your system's default, or type the exact device name Direwolf expects for your OS."
+                    }
+                  />
+                )}
               />
-              <TextField
-                label="Audio output device (optional)"
+              <Autocomplete
+                freeSolo
+                options={audioDevices.outputs.map((d) => d.name)}
                 value={audioOutputDevice}
-                onChange={(e) => setAudioOutputDevice(e.target.value)}
-                placeholder="System default"
-                helperText="Leave blank to use your system's default speaker/output."
+                onInputChange={(e, v) => setAudioOutputDevice(v)}
+                renderOption={(props, opt) => {
+                  const d = audioDevices.outputs.find((x) => x.name === opt);
+                  return <li {...props}>{opt}{d && d.isDefault ? ' (system default)' : ''}</li>;
+                }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Audio output device (optional)"
+                    placeholder="System default"
+                    helperText={
+                      audioDevices.outputs.length > 0
+                        ? "Leave blank to use your system's default speaker/output."
+                        : "Leave blank for your system's default, or type the exact device name Direwolf expects for your OS."
+                    }
+                  />
+                )}
               />
               <TextField select label="PTT method" value={pttMethod} onChange={(e) => setPttMethod(e.target.value)}>
                 {Object.entries(PTT_METHOD_LABELS).map(([v, label]) => (

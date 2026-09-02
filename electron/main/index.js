@@ -120,6 +120,8 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('soundmodem:listAudioDevices', () => soundModemManager.listAudioDevices());
+
   ipcMain.handle('tnc:list', () => tncManager.listTncs());
   ipcMain.handle('tnc:create', (_e, config) => tncManager.createTnc(config));
   ipcMain.handle('tnc:update', (_e, tncId, patch) => tncManager.updateTnc(tncId, patch));

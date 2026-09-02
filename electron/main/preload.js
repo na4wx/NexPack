@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // connection, serial port, and raw socket lives in the main process.
 contextBridge.exposeInMainWorld('nexdigi', {
   listSerialPorts: () => ipcRenderer.invoke('serial:list'),
+  listSoundModemAudioDevices: () => ipcRenderer.invoke('soundmodem:listAudioDevices'),
 
   listTncs: () => ipcRenderer.invoke('tnc:list'),
   createTnc: (config) => ipcRenderer.invoke('tnc:create', config),

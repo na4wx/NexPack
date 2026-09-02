@@ -51,6 +51,7 @@ class SoundModemManager extends EventEmitter {
     fs.mkdirSync(this.dataDir, { recursive: true });
     this.instances = new Map(); // tncId -> { proc, port, confPath }
     this._probeCache = new Map(); // bin path -> resolved {input, output} (only ever changes if the OS's default device changes, which needs a relaunch of NexPack anyway)
+    this._deviceListCache = null; // { bin, result } — see listAudioDevices()
   }
 
   _confPathFor(tncId) {
@@ -217,6 +218,24 @@ class SoundModemManager extends EventEmitter {
   // since the answer won't change without an OS-level device change anyway.
   async _probeDefaultDevices(bin) {
     if (this._probeCache.has(bin)) return this._probeCache.get(bin);
+    const output = await this._runDeviceProbe(bin);
+    const input = /\[\s*Default Input\s*\][\s\S]*?Name\s*=\s*"([^"]+)"/.exec(output);
+    const outputMatch = /\[\s*Default Output\s*\][\s\S]*?Name\s*=\s*"([^"]+)"/.exec(output);
+    const result = (input && outputMatch) ? { input: input[1], output: outputMatch[1] } : null;
+    if (!result) this.emit('log', { tncId: null, line: 'Could not detect a default audio device automatically — please set one explicitly in the sound modem settings.\n' });
+    this._probeCache.set(bin, result);
+    return result;
+  }
+
+  // Runs the same "request an impossible device name" probe as
+  // _probeDefaultDevices, but returns the raw text so callers can parse out
+  // whatever they need (just the two defaults, or — see listAudioDevices —
+  // every device Direwolf actually sees). One retry with a longer window:
+  // CoreAudio device enumeration can occasionally take a while under load
+  // (observed running right after several other Direwolf processes had just
+  // been spawned back-to-back), though it normally returns in well under a
+  // second.
+  async _runDeviceProbe(bin) {
     const confPath = path.join(this.dataDir, '_probe.conf');
     fs.writeFileSync(confPath, [
       'ADEVICE __nexpack-probe-nonexistent-device__ __nexpack-probe-nonexistent-device__',
@@ -225,13 +244,7 @@ class SoundModemManager extends EventEmitter {
       'KISSPORT 12345'
     ].join(os.EOL) + os.EOL);
 
-    // CoreAudio device enumeration can occasionally take a while under
-    // load (observed running right after several other Direwolf processes
-    // had just been spawned back-to-back) — one retry with a longer window
-    // covers that without penalizing the common case, where it returns in
-    // well under a second.
-    let result = null;
-    for (let attempt = 0; attempt < 2 && !result; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       const output = await new Promise((resolve) => {
         let buf = '';
         const proc = spawn(bin, ['-c', confPath, '-t', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -241,13 +254,78 @@ class SoundModemManager extends EventEmitter {
         proc.on('exit', () => done());
         setTimeout(done, 8000);
       });
-      const input = /\[\s*Default Input\s*\][\s\S]*?Name\s*=\s*"([^"]+)"/.exec(output);
-      const outputMatch = /\[\s*Default Output\s*\][\s\S]*?Name\s*=\s*"([^"]+)"/.exec(output);
-      if (input && outputMatch) result = { input: input[1], output: outputMatch[1] };
+      if (/Number of devices/.test(output)) return output;
     }
-    if (!result) this.emit('log', { tncId: null, line: 'Could not detect a default audio device automatically — please set one explicitly in the sound modem settings.\n' });
-    this._probeCache.set(bin, result);
+    return '';
+  }
+
+  // Populates the audio device dropdowns in the Add TNC dialog with real
+  // device names/tokens Direwolf itself will actually accept — rather than
+  // free text the user has to somehow discover correctly, which is exactly
+  // the class of mistake _probeDefaultDevices above was built to avoid.
+  //
+  // Only macOS (PortAudio) and Linux (ALSA) are populated for real:
+  // - macOS reuses the same probe run as _probeDefaultDevices, parsing
+  //   every "device #N" block instead of only the two default-tagged ones,
+  //   split into inputs/outputs by which have Max inputs/outputs > 0.
+  // - Linux has no equivalent listing built into Direwolf's ALSA backend
+  //   (confirmed in audio.c — it calls snd_pcm_open() directly with
+  //   whatever string it's given, no enumeration on failure) — so this
+  //   reads /proc/asound/cards instead (always present when ALSA has any
+  //   hardware, no extra package needed) and builds "plughw:CARD=<id>,DEV=0"
+  //   tokens, which Direwolf's ALSA open call accepts directly.
+  // - Windows' WINMM backend (audio_win.c) *does* print a device list
+  //   unconditionally, by index and name — but that's unverified here since
+  //   this environment has no way to actually run a Windows binary (no
+  //   Wine). Left returning an empty list rather than shipping unverified
+  //   parsing; the UI's free-text entry still works for Windows users.
+  //
+  // Cached per binary path, same reasoning as _probeDefaultDevices.
+  async listAudioDevices() {
+    const bin = this._resolveBinaryPath();
+    if (this._deviceListCache && this._deviceListCache.bin === bin) return this._deviceListCache.result;
+
+    let result = { inputs: [], outputs: [] };
+    if (process.platform === 'darwin') {
+      const output = await this._runDeviceProbe(bin);
+      const inputs = [];
+      const outputs = [];
+      const blockRe = /---+ device #\d+\n([\s\S]*?)(?=---+ device #\d+|\nRequested|\nRunning off|$)/g;
+      let m;
+      while ((m = blockRe.exec(output)) !== null) {
+        const block = m[1];
+        const name = /Name\s*=\s*"([^"]+)"/.exec(block);
+        const maxIn = /Max inputs\s*=\s*(\d+)/.exec(block);
+        const maxOut = /Max outputs\s*=\s*(\d+)/.exec(block);
+        if (!name) continue;
+        const isDefaultIn = /\[\s*Default Input\s*\]/.test(block);
+        const isDefaultOut = /\[\s*Default Output\s*\]/.test(block);
+        if (maxIn && Number(maxIn[1]) > 0) inputs.push({ name: name[1], isDefault: isDefaultIn });
+        if (maxOut && Number(maxOut[1]) > 0) outputs.push({ name: name[1], isDefault: isDefaultOut });
+      }
+      result = { inputs, outputs };
+    } else if (process.platform === 'linux') {
+      const cards = this._readAlsaCards();
+      result = { inputs: cards, outputs: cards };
+    }
+    this._deviceListCache = { bin, result };
     return result;
+  }
+
+  _readAlsaCards() {
+    let text;
+    try { text = fs.readFileSync('/proc/asound/cards', 'utf8'); } catch (e) { return []; }
+    const cards = [];
+    // Real line shape: " 0 [PCH            ]: HDA-Intel - HDA Intel PCH"
+    const lineRe = /^\s*(\d+)\s+\[([^\]]+)\]:\s*(.+)$/gm;
+    let m;
+    while ((m = lineRe.exec(text)) !== null) {
+      const index = m[1];
+      const id = m[2].trim();
+      const desc = m[3].trim();
+      cards.push({ name: `plughw:CARD=${id},DEV=0`, label: `${desc} (card ${index})`, isDefault: false });
+    }
+    return cards;
   }
 
   // Direwolf's config file format: https://github.com/wb2osz/direwolf/blob/master/doc/User-Guide.pdf
