@@ -411,7 +411,6 @@ export default function AprsWorkspace({ onOpenSettings }) {
   const [aprsIsConnected, setAprsIsConnected] = useState(false);
   const [unread, setUnread] = useState(0);
   const [homePosition, setHomePosition] = useState(null);
-  const [beaconText, setBeaconText] = useState('');
   const [beaconSaving, setBeaconSaving] = useState(false);
   const [beaconError, setBeaconError] = useState('');
 
@@ -426,7 +425,7 @@ export default function AprsWorkspace({ onOpenSettings }) {
       for (const o of list || []) map[o.name] = o;
       setObjects(map);
     });
-    window.nexdigi.aprsGetMyStation().then((my) => { setHomePosition(my.homePosition || null); setBeaconText(my.comment || ''); });
+    window.nexdigi.aprsGetMyStation().then((my) => setHomePosition(my.homePosition || null));
     const offStation = window.nexdigi.onAprsStation((record) => {
       setStations((prev) => ({ ...prev, [record.callsign]: record }));
     });
@@ -473,12 +472,13 @@ export default function AprsWorkspace({ onOpenSettings }) {
     setMonitorOpen(true);
   };
 
+  // Beacon text itself lives in Settings (My Station -> Beacon text) and is
+  // included automatically on every beacon, scheduled or manual — this is
+  // just a quick "send one now" action, not a place to edit that text.
   const sendBeacon = async () => {
     setBeaconSaving(true);
     setBeaconError('');
     try {
-      const my = await window.nexdigi.aprsGetMyStation();
-      await window.nexdigi.aprsSaveMyStation({ ...my, comment: beaconText.trim() });
       await window.nexdigi.aprsBeaconNow();
     } catch (e) {
       setBeaconError(e.message || String(e));
@@ -506,22 +506,12 @@ export default function AprsWorkspace({ onOpenSettings }) {
           </Tooltip>
           <Tooltip title="Packet monitor"><IconButton size="small" onClick={toggleMonitor}><RouterIcon fontSize="small" /></IconButton></Tooltip>
           <Tooltip title="Objects"><IconButton size="small" onClick={() => setObjectsOpen(true)}><PlaceIcon fontSize="small" /></IconButton></Tooltip>
-          <Tooltip title="APRS settings"><IconButton size="small" onClick={() => onOpenSettings('aprs')}><SettingsIcon fontSize="small" /></IconButton></Tooltip>
-        </Stack>
-        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ px: 1, mb: 1 }}>
-          <TextField
-            size="small"
-            fullWidth
-            placeholder="Beacon text / status"
-            value={beaconText}
-            onChange={(e) => setBeaconText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') sendBeacon(); }}
-          />
-          <Tooltip title="Save and beacon now">
+          <Tooltip title="Beacon now">
             <span>
               <IconButton size="small" onClick={sendBeacon} disabled={beaconSaving}><SendIcon fontSize="small" /></IconButton>
             </span>
           </Tooltip>
+          <Tooltip title="APRS settings"><IconButton size="small" onClick={() => onOpenSettings('aprs')}><SettingsIcon fontSize="small" /></IconButton></Tooltip>
         </Stack>
         {beaconError && <Typography variant="caption" color="error.main" sx={{ px: 1, mb: 1 }}>{beaconError}</Typography>}
         <TextField size="small" placeholder="Search callsign…" value={search} onChange={(e) => setSearch(e.target.value)} sx={{ mx: 1, mb: 1 }} />

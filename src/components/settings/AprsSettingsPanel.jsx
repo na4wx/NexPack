@@ -164,7 +164,6 @@ export default function AprsSettingsPanel({ tncs }) {
         </Typography>
         <Typography variant="caption" color="text.secondary">Symbol</Typography>
         <SymbolPicker value={symbol} onChange={setSymbol} />
-        <TextField label="Comment" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="NexPack" />
         <Stack direction="row" spacing={1}>
           <TextField label="Home latitude" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="39.8000" />
           <TextField label="Home longitude" value={lon} onChange={(e) => setLon(e.target.value)} placeholder="-98.6000" />
@@ -172,6 +171,13 @@ export default function AprsSettingsPanel({ tncs }) {
 
         <Divider />
         <Typography variant="subtitle2">Beacon</Typography>
+        <TextField
+          label="Beacon text"
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="NexPack"
+          helperText='Sent as the comment on every beacon — periodic and manual ("Beacon now").'
+        />
         <FormControlLabel control={<Switch checked={beaconEnabled} onChange={(e) => setBeaconEnabled(e.target.checked)} />} label="Periodic beacon" />
         <TextField label="Interval (minutes)" type="number" value={interval_} onChange={(e) => setInterval_(e.target.value)} disabled={!beaconEnabled} />
         <TextField label="Path" value={pathStr} onChange={(e) => setPathStr(e.target.value)} disabled={!beaconEnabled} />
