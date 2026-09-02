@@ -2,9 +2,11 @@
 
 **A next-generation packet radio, Winlink, and APRS client for the desktop.**
 
-A standalone companion app for [NexDigi](https://github.com/na4wx/NexDigi), covering multi-TNC/multi-radio packet terminal, Winlink + BBS mail, real-time chat, and a full APRS client in one place.
+> ⚠️ **Alpha software — currently v0.3.0.** Actively developed and tested against real RF hardware, but expect rough edges, incomplete parsing of edge cases, and breaking changes between versions. Not yet recommended for anything you depend on.
 
-Built with Electron + React + MUI. All TNC/radio I/O (serial, KISS-TCP, AGWPE) runs in the Electron main process; the renderer talks to it over IPC only.
+A standalone companion app for [NexDigi](https://github.com/na4wx/NexDigi), covering multi-TNC/multi-radio packet terminal, Winlink + BBS mail, real-time chat (internet or RF), a full APRS client, and an optional built-in sound-card TNC in one place.
+
+Built with Electron + React + MUI. All TNC/radio I/O (serial, KISS-TCP, AGWPE, built-in sound modem) runs in the Electron main process; the renderer talks to it over IPC only.
 
 ## Downloads
 
@@ -16,17 +18,22 @@ Prebuilt installers are on the [Releases page](https://github.com/na4wx/NexPack/
 
 ## Features
 
-- **Terminal** — connected-mode AX.25 sessions over serial KISS, KISS-TCP, or real AGWPE, with multi-TNC/multi-radio support. Also supports digipeater paths (up to 8 hops), YAPP binary file transfer, per-session logging to disk, and saved connect scripts (e.g. automated BBS login handshakes).
+- **Terminal** — connected-mode AX.25 sessions over serial KISS, KISS-TCP, real AGWPE, or the built-in sound-card modem, with multi-TNC/multi-radio support. Also supports digipeater paths (up to 8 hops), YAPP binary file transfer, per-session logging to disk, and saved connect scripts (e.g. automated BBS login handshakes). Terminal, BBS, and Chat can each be given their own callsign-SSID that accepts *incoming* RF connections — a remote station connecting to Terminal's identity gets an editable preamble and a "reply CHAT or BBS" menu; connecting directly to BBS's or Chat's own identity skips the menu entirely.
 - **Winlink** — native B2F client (via a bundled [`pat`](https://github.com/la5nta/pat) subprocess) over RF (RMS Gateway) or Telnet, with your own Winlink account — messages live on your station, not on NexDigi.
 - **BBS** — read/post/delete NexDigi BBS mail either over the internet (NexDigi's REST API) or directly over RF, driving the digipeater's real AX.25 connected-mode BBS protocol with no internet required.
-- **Chat** — real-time chat against NexDigi's own chat protocol (REST + WebSocket).
-- **APRS** — a full client, not just a viewer: RF monitoring (always on, no APRS-IS required) plus optional APRS-IS, beaconing, messaging (with ack/retry), station detail (distance/bearing, packet log, weather, telemetry), objects/items, and a Leaflet map with custom station icons.
+- **Chat** — real-time chat against NexDigi's own chat system, over the internet (REST + WebSocket) **or over RF** — a toggle switches Chat onto the same AX.25 BBS connection RF BBS uses, driving the digipeater's real keyboard-to-keyboard chat protocol (rooms, `/join`, `/msg`, `/list`, `/users`, ...) with no internet required.
+- **APRS** — a full client, not just a viewer: RF monitoring (always on, no APRS-IS required) plus optional APRS-IS, beaconing (with a default beacon text of `NexPack v.<version>`, editable in settings), messaging (with ack/retry), station detail (distance/bearing, packet log, weather, telemetry), objects/items, and a Leaflet map with custom station icons and hover-to-see-callsign tooltips.
+  - The map's home-position circle is a real **footprint indicator**, not a fixed radius — it grows to the farthest station you've ever actually heard *direct* (no digipeater in the path), and stations heard direct get a green ring on their marker so you can see what's establishing that radius at a glance.
+  - Messages and a live Packet Monitor can each be opened as a floating window or docked to the right of the map (stacking vertically, with a drag-to-resize divider, when both are docked); the station list, station detail panel, and docked panels are all drag-to-resize with widths remembered across restarts.
+- **Built-in Sound Modem** *(experimental)* — a new TNC type that runs [Direwolf](https://github.com/wb2osz/direwolf) against a USB/Bluetooth-paired sound card directly, no external TNC hardware or software required. NexPack builds and bundles its own Direwolf binaries for macOS, Linux, and Windows (see [Credits](#credits)) with real audio-device dropdowns populated from the actual device list. PTT via VOX, CM108 GPIO, or serial RTS/DTR.
+- **Update checker** — Settings → About has a "Check for updates" button, and the app checks once on launch, against the project's GitHub Releases.
 
 ## Supported TNC connections
 
 - **Serial (KISS)** — any TNC/soundmodem exposing a KISS interface over a serial port.
 - **KISS over TCP** — e.g. Direwolf, UZ7HO SoundModem in KISS-TCP mode.
 - **AGWPE** — real AGWPE binary protocol (login, port info, raw-frame send/receive), for AGWPE-native servers and multi-port TNCs.
+- **Built-in Sound Modem** *(experimental)* — NexPack's own bundled Direwolf, driving a USB/Bluetooth sound card directly with no external TNC software needed.
 
 A single KISS TNC (serial or TCP) can host multiple radios via the KISS port nibble (0–15) if the hardware multiplexes them; AGWPE TNCs natively expose multiple radio ports over one connection.
 
@@ -64,6 +71,7 @@ Uses `electron-builder`; output lands in `release/`.
 ## Credits
 
 - **[pat](https://github.com/la5nta/pat)** by Martin Hebnes Pedersen (LA5NTA) and contributors — the Winlink B2F client that powers the Winlink section. Licensed GPL-3.0; NexPack bundles it as an unmodified subprocess and drives it entirely through its local HTTP API (mere aggregation, per GPL-3.0 §5) — NexPack's own code stays MIT. See pat's own [LICENSE](https://github.com/la5nta/pat/blob/master/LICENSE).
+- **[Direwolf](https://github.com/wb2osz/direwolf)** by John Langner (WB2OSZ) and contributors — the AFSK/9600 software modem behind the built-in Sound Modem TNC type. Licensed GPL-2.0-or-later; since no portable official binary exists for every platform NexPack ships, NexPack builds its own from source per-platform (see `scripts/build-direwolf/`) and runs it as an unmodified subprocess over its own KISS-TCP port (mere aggregation) — NexPack's own code stays MIT. See Direwolf's own [LICENSE](https://github.com/wb2osz/direwolf/blob/master/LICENSE).
 - **[Leaflet](https://leafletjs.com/)** (BSD-2-Clause) — the mapping library behind the APRS map.
 - **[OpenStreetMap](https://www.openstreetmap.org/copyright)** contributors — map tile data shown on the APRS map, © OpenStreetMap contributors, ODbL.
 - **[NexDigi](https://github.com/na4wx/NexDigi)** — the digipeater server this app is a companion to.
