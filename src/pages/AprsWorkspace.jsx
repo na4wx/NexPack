@@ -143,8 +143,15 @@ function SplitHandle({ onMouseDown }) {
   );
 }
 
-function stationIcon(symbol) {
-  return L.divIcon({ html: getStationIconHtml(symbol), className: '', iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -14] });
+// A thin green ring marks any station ever heard direct (no digipeater
+// repeat) — the same distinction the footprint circle's radius is based
+// on, so at a glance you can see which stations actually establish that
+// radius vs. which are only reachable via a digipeater.
+function stationIcon(symbol, everHeardDirect) {
+  const html = everHeardDirect
+    ? `<div style="border:2px solid #4caf50;border-radius:50%;box-sizing:border-box;width:100%;height:100%;display:flex;align-items:center;justify-content:center">${getStationIconHtml(symbol)}</div>`
+    : getStationIconHtml(symbol);
+  return L.divIcon({ html, className: '', iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -14] });
 }
 
 function objectIcon(symbol) {
@@ -425,6 +432,14 @@ function StationDetailPanel({ station, onClose, onMessage, width }) {
       {station.distanceMiles !== undefined && (
         <Chip size="small" icon={<PlaceIcon />} label={distanceLabel(station)} sx={{ mt: 1 }} />
       )}
+      {station.source === 'rf' && station.lastHeardDirect !== undefined && (
+        <Chip
+          size="small"
+          label={station.lastHeardDirect ? 'Heard direct' : 'Heard via digipeater'}
+          color={station.lastHeardDirect ? 'success' : 'default'}
+          sx={{ mt: 1, ml: 0.5 }}
+        />
+      )}
       <Button size="small" startIcon={<ChatIcon />} sx={{ mt: 1 }} onClick={() => onMessage(station.callsign)}>Message</Button>
 
       {station.weather && (
@@ -540,6 +555,13 @@ export default function AprsWorkspace({ onOpenSettings }) {
   const selected = selectedCallsign ? stations[selectedCallsign] : null;
   const defaultCenter = homePosition ? [homePosition.lat, homePosition.lon] : (withPosition.length ? [withPosition[0].lastPosition.lat, withPosition[0].lastPosition.lon] : [39.8, -98.6]);
 
+  // Real footprint radius: the farthest station ever heard DIRECT (no
+  // digipeater repeat), not a fixed guess — grows and shrinks as real
+  // direct contacts are heard. null (no circle) until at least one direct
+  // contact with a known position has actually been heard.
+  const directStations = withPosition.filter((s) => s.everHeardDirect && s.distanceMiles !== undefined);
+  const footprintMiles = directStations.length ? Math.max(...directStations.map((s) => s.distanceMiles)) : null;
+
   const openMessages = (target) => {
     setMessageTarget(target || '');
     setUnread(0);
@@ -601,7 +623,7 @@ export default function AprsWorkspace({ onOpenSettings }) {
             <ListItemButton key={s.callsign} selected={s.callsign === selectedCallsign} onClick={() => setSelectedCallsign(s.callsign)} disabled={!s.lastPosition} sx={{ opacity: isStale(s.lastSeen) ? 0.5 : 1 }}>
               <ListItemText
                 primary={s.callsign}
-                secondary={`${distanceLabel(s) ? distanceLabel(s) + ' · ' : ''}${s.source}${s.lastPosition ? '' : ' · no position'} · ${new Date(s.lastSeen).toLocaleTimeString()}`}
+                secondary={`${distanceLabel(s) ? distanceLabel(s) + ' · ' : ''}${s.source === 'rf' && s.lastHeardDirect !== undefined ? (s.lastHeardDirect ? 'direct' : 'via digi') + ' · ' : ''}${s.source}${s.lastPosition ? '' : ' · no position'} · ${new Date(s.lastSeen).toLocaleTimeString()}`}
               />
             </ListItemButton>
           ))}
@@ -612,9 +634,15 @@ export default function AprsWorkspace({ onOpenSettings }) {
       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
         <MapContainer center={defaultCenter} zoom={withPosition.length ? 8 : 4} style={{ height: '100%', width: '100%', background: '#0d1117' }}>
           <CachedOsmTileLayer attribution='&copy; OpenStreetMap contributors' />
-          {homePosition && <Circle center={[homePosition.lat, homePosition.lon]} radius={16093} pathOptions={{ color: '#5b9bff', weight: 1, fillOpacity: 0.03 }} />}
+          {homePosition && footprintMiles !== null && (
+            <Circle
+              center={[homePosition.lat, homePosition.lon]}
+              radius={footprintMiles * 1609.34}
+              pathOptions={{ color: '#4caf50', weight: 1, fillOpacity: 0.03 }}
+            />
+          )}
           {withPosition.map((s) => (
-            <Marker key={s.callsign} position={[s.lastPosition.lat, s.lastPosition.lon]} icon={stationIcon(s.symbol)} opacity={isStale(s.lastSeen) ? 0.4 : 1} eventHandlers={{ click: () => setSelectedCallsign(s.callsign) }}>
+            <Marker key={s.callsign} position={[s.lastPosition.lat, s.lastPosition.lon]} icon={stationIcon(s.symbol, s.everHeardDirect)} opacity={isStale(s.lastSeen) ? 0.4 : 1} eventHandlers={{ click: () => setSelectedCallsign(s.callsign) }}>
               <Popup>
                 <strong>{s.callsign}</strong><br />
                 {s.comment && <>{s.comment}<br /></>}
@@ -625,6 +653,9 @@ export default function AprsWorkspace({ onOpenSettings }) {
                   <>{s.weather.temperature !== undefined ? `${s.weather.temperature}°F ` : ''}{s.weather.humidity !== undefined ? `${s.weather.humidity}% RH` : ''}<br /></>
                 )}
                 {distanceLabel(s) && <>{distanceLabel(s)}<br /></>}
+                {s.source === 'rf' && s.lastHeardDirect !== undefined && (
+                  <>{s.lastHeardDirect ? 'Heard direct' : 'Heard via digipeater'}<br /></>
+                )}
                 via {s.source} · heard {new Date(s.lastSeen).toLocaleString()}
               </Popup>
             </Marker>

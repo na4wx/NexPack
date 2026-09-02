@@ -11,6 +11,8 @@ const fs = require('fs');
 const path = require('path');
 const TncManager = require('../electron/main/tnc/TncManager');
 const AprsManager = require('../electron/main/aprs/AprsManager');
+const { buildAx25Frame } = require('../electron/main/ax25/ax25');
+const { escapeFrame } = require('../electron/main/ax25/kiss');
 
 function startBridge(port) {
   return new Promise((resolve) => {
@@ -22,6 +24,22 @@ function startBridge(port) {
     });
     server.listen(port, '127.0.0.1', () => resolve(server));
   });
+}
+
+// Simulates a real digipeater repeat: builds a real AX.25 frame with a
+// path, then manually sets the AX.25 H-bit ("has been repeated") on the
+// first path address's byte, the same way an actual digipeater marks a
+// hop it has retransmitted. There's no in-process digipeater to produce
+// this legitimately, so this constructs the on-air bytes directly and
+// injects them straight onto the bridge (bypassing TncManager's own
+// sendUnproto, which always originates with H-bit 0).
+function sendDigipeatedFrame(bridgeSocket, { dest, src, path, payload }) {
+  const frame = buildAx25Frame({ dest, src, control: 0x03, pid: 0xf0, payload: Buffer.from(payload, 'utf8'), path });
+  // Address layout: dest(0-6), src(7-13), path[0](14-20), path[1](21-27)...
+  // — the H-bit lives in byte 6 of each 7-byte address field.
+  const firstPathHBitOffset = 14 + 6;
+  frame[firstPathHBitOffset] |= 0x80;
+  bridgeSocket.write(escapeFrame(frame, 0));
 }
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -60,11 +78,44 @@ async function main() {
     assert.ok(Math.abs(record.lastPosition.lon - -(72 + 1.75 / 60)) < 0.0001, 'longitude should decode correctly');
     assert.strictEqual(record.source, 'rf');
     assert.strictEqual(record.comment, ''); // status only set for Mic-E; not asserting comment parsing here
+    // No path at all -> definitely heard direct, not through a digipeater.
+    assert.strictEqual(record.lastHeardDirect, true);
+    assert.strictEqual(record.everHeardDirect, true);
   });
 
   await test('getStations() reflects the update', () => {
     const stations = aprs.getStations();
     assert.ok(stations.find((s) => s.callsign === 'N0CALL-9'));
+  });
+
+  await test('a frame repeated by a digipeater (real H-bit set) is recorded as heard via digipeater, not direct', async () => {
+    // Direct socket onto the bridge, not through mgrA/TncManager, so the
+    // H-bit can be set exactly like a real digipeater would.
+    const raw = net.createConnection({ host: '127.0.0.1', port: bridgePort });
+    await new Promise((resolve) => raw.on('connect', resolve));
+    sendDigipeatedFrame(raw, { dest: 'APZNXP', src: 'KC5XYZ-9', path: ['WIDE1-1', 'WIDE2-1'], payload: '!4900.00N/07200.00W>Heard via digi' });
+    await wait(300);
+    raw.end();
+
+    const record = aprs.getStations().find((s) => s.callsign === 'KC5XYZ-9');
+    assert.ok(record, 'AprsManager should have produced a station record for KC5XYZ-9');
+    assert.strictEqual(record.lastHeardDirect, false, 'a marked (repeated) path hop means this was NOT heard direct');
+    assert.strictEqual(record.everHeardDirect, false);
+  });
+
+  await test('everHeardDirect is sticky: a station heard direct once stays flagged even if later heard only via a digipeater', async () => {
+    // KC5XYZ-9 above was only ever heard via digi. This one (N0CALL-9) was
+    // heard direct in the very first test above — confirm a subsequent
+    // digipeated packet from the SAME station doesn't clear that history.
+    const raw = net.createConnection({ host: '127.0.0.1', port: bridgePort });
+    await new Promise((resolve) => raw.on('connect', resolve));
+    sendDigipeatedFrame(raw, { dest: 'APZNXP', src: 'N0CALL-9', path: ['WIDE1-1', 'WIDE2-1'], payload: '!4903.50N/07201.75W>Now via digi' });
+    await wait(300);
+    raw.end();
+
+    const record = aprs.getStations().find((s) => s.callsign === 'N0CALL-9');
+    assert.strictEqual(record.lastHeardDirect, false, 'this specific packet was digipeated');
+    assert.strictEqual(record.everHeardDirect, true, 'but it was heard direct at least once before, which should stick');
   });
 
   console.log(`\nTests passed: ${pass}`);

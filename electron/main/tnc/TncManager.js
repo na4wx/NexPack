@@ -285,6 +285,13 @@ class TncManager extends EventEmitter {
     return true;
   }
 
+  // The trailing '*' on a marked address is the real, standard convention
+  // for "this digipeater has already repeated the frame" (visible in any
+  // real TNC monitor — e.g. "Via AC2VK-1*,WIDE1*,WIDE2-2"). parseAx25Frame
+  // already extracts this (the AX.25 H-bit, as `marked`) but it was being
+  // silently dropped here before reaching the 'monitor' event — nothing
+  // downstream (this monitor pane, or AprsManager's direct-vs-digipeated
+  // tracking) could tell a repeated hop from an unused one in the path.
   _emitMonitor(t, radio, direction, frameType, parsed, raw) {
     let text;
     try { text = parsed.payload && parsed.payload.length ? parsed.payload.toString('utf8') : ''; } catch (e) { text = ''; }
@@ -294,7 +301,7 @@ class TncManager extends EventEmitter {
       direction,
       frameType,
       timestamp: Date.now(),
-      addresses: (parsed.addresses || []).map((a) => `${a.callsign}${a.ssid ? '-' + a.ssid : ''}`),
+      addresses: (parsed.addresses || []).map((a) => `${a.callsign}${a.ssid ? '-' + a.ssid : ''}${a.marked ? '*' : ''}`),
       control: parsed.control,
       text,
       raw: raw.toString('hex')

@@ -110,7 +110,14 @@ class AprsManager extends EventEmitter {
   }
 
   // ---- shared station update path ----
-  _updateStation(callsign, updates, source, rawPacket) {
+  // heardDirect: only meaningful for source==='rf' — true if this specific
+  // reception had no digipeater in its path that had actually repeated it
+  // (see _handleRfFrame), undefined for APRS-IS/self where "direct" has no
+  // RF meaning. `everHeardDirect` is sticky (once true, stays true) so a
+  // station that's usually only heard via a digipeater but was caught
+  // direct once still counts toward the real-footprint radius on the map —
+  // that's the actual point of tracking this at all.
+  _updateStation(callsign, updates, source, rawPacket, heardDirect) {
     const existing = this.stations.get(callsign);
     const hasPosition = updates.latitude !== undefined;
     const position = hasPosition ? { lat: updates.latitude, lon: updates.longitude, course: updates.course, speed: updates.speed } : (existing && existing.lastPosition);
@@ -124,7 +131,9 @@ class AprsManager extends EventEmitter {
       source,
       comment: updates.status || (existing && existing.comment) || '',
       weather: updates.weather || (existing && existing.weather),
-      telemetry: existing && existing.telemetry
+      telemetry: existing && existing.telemetry,
+      lastHeardDirect: source === 'rf' ? heardDirect : (existing && existing.lastHeardDirect),
+      everHeardDirect: (existing && existing.everHeardDirect) || (source === 'rf' && heardDirect === true)
     };
     if (hasPosition) {
       record.positionHistory.push({ lat: updates.latitude, lon: updates.longitude, timestamp: record.lastSeen });
@@ -148,7 +157,7 @@ class AprsManager extends EventEmitter {
   // can appear mid-payload, e.g. inside a weather packet's comment), so
   // trying it against a ';' object or ':' message payload can spuriously
   // match garbage buried in the name/timestamp/addressee fields.
-  _ingestPacket({ callsign, text, source, destBytes }) {
+  _ingestPacket({ callsign, text, source, destBytes, heardDirect }) {
     if (!callsign || !text) return;
     const dti = text[0];
 
@@ -173,7 +182,7 @@ class AprsManager extends EventEmitter {
       if (posDecoded || weatherDecoded) {
         const merged = { ...(posDecoded || {}) };
         if (weatherDecoded) merged.weather = weatherDecoded;
-        this._updateStation(callsign, merged, source, text);
+        this._updateStation(callsign, merged, source, text, heardDirect);
         return;
       }
     }
@@ -181,7 +190,7 @@ class AprsManager extends EventEmitter {
     if (destBytes) {
       try {
         const micEDecoded = decodeMicE(destBytes, text);
-        if (micEDecoded) { this._updateStation(callsign, micEDecoded, source, text); return; }
+        if (micEDecoded) { this._updateStation(callsign, micEDecoded, source, text, heardDirect); return; }
       } catch (e) { /* not Mic-E */ }
     }
   }
@@ -200,7 +209,13 @@ class AprsManager extends EventEmitter {
     if (evt.raw) {
       try { destBytes = Buffer.from(Buffer.from(evt.raw, 'hex').slice(0, 6)).map((b) => b >> 1); } catch (e) { /* ignore */ }
     }
-    this._ingestPacket({ callsign: srcAddr, text: evt.text, source: 'rf', destBytes });
+    // evt.addresses is [dest, src, ...digipeaterPath], each path entry
+    // suffixed '*' by TncManager._emitMonitor when its AX.25 H-bit is set
+    // — i.e. that digipeater actually repeated this specific frame, not
+    // just that it was named in the path. No marked hop (including an
+    // empty path) means nothing digipeated it for us: heard direct.
+    const heardDirect = !(evt.addresses || []).slice(2).some((a) => a.endsWith('*'));
+    this._ingestPacket({ callsign: srcAddr, text: evt.text, source: 'rf', destBytes, heardDirect });
   }
 
   // ---- APRS-IS ----
