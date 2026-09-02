@@ -65,6 +65,27 @@ async function main() {
     assert.ok(Math.abs(record.lastPosition.lon - -(72 + 1.75 / 60)) < 0.001, 'longitude should match');
   });
 
+  await test('beacons transmit with a real tocall (not literal "APRS") and the configured digipeater path', async () => {
+    // Real-world bug: the AX.25 destination was hardcoded to the literal
+    // string 'APRS' instead of a proper software tocall, and the
+    // beacon.path setting (shown correctly in AprsSettingsPanel, saved
+    // correctly) was never actually read when transmitting — every RF
+    // packet went out completely path-less regardless of configuration.
+    // Reconfigure A's beacon with a real path and capture the raw TX frame
+    // via TncManager's own 'monitor' event to verify both are fixed.
+    aprsA.saveMyStation({ mycall: 'N0CALL-9', symbol: '/>', comment: 'Test A', homePosition: { lat: 49 + 3.5 / 60, lon: -(72 + 1.75 / 60) }, beacon: { enabled: false, intervalMinutes: 30, path: 'WIDE1-1,WIDE2-1', tncId: tncA.id, radioId: radioA.id } });
+
+    const monitored = new Promise((resolve) => {
+      mgrA.once('monitor', (evt) => { if (evt.direction === 'tx' && evt.frameType === 'ui') resolve(evt); });
+    });
+    aprsA.beaconNow();
+    const evt = await monitored;
+
+    assert.notStrictEqual(evt.addresses[0], 'APRS', 'destination should not be the bare literal "APRS"');
+    assert.match(evt.addresses[0], /^AP[A-Z0-9]{2,4}$/, `destination "${evt.addresses[0]}" should look like a real tocall (AP + software code)`);
+    assert.deepStrictEqual(evt.addresses.slice(2), ['WIDE1-1', 'WIDE2-1'], 'the configured digipeater path should be present on the transmitted frame');
+  });
+
   await test('sendMessage() round-trips: B auto-acks, A marks the message acked', async () => {
     aprsA.sendMessage('W1ABC-1', 'hello from A');
     await wait(400);

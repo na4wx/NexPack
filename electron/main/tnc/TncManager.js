@@ -653,14 +653,22 @@ class TncManager extends EventEmitter {
   }
 
   // ---- outbound: unconnected (UI) ----
-  sendUnproto(tncId, radioId, destCallsign, text) {
+  // path: optional array of digipeater callsigns (e.g. ['WIDE1-1','WIDE2-1'])
+  // — buildAx25Frame already supports this; it just wasn't threaded through
+  // here, which meant every UI frame (APRS beacons in particular) went out
+  // completely path-less regardless of what was configured.
+  sendUnproto(tncId, radioId, destCallsign, text, path) {
     const t = this.tncs.get(tncId);
     const radio = t.config.radios.find((r) => r.id === radioId);
     if (!t || !radio) throw new Error('unknown TNC/radio');
     const payload = Buffer.from(text, 'utf8');
-    const frame = buildAx25Frame({ dest: destCallsign, src: radio.callsign, control: CTL.UI, pid: 0xf0, payload });
+    const frame = buildAx25Frame({ dest: destCallsign, src: radio.callsign, control: CTL.UI, pid: 0xf0, payload, path });
     this._txAx25Frame(t, radio, frame);
-    this._emitMonitor(t, radio, 'tx', 'ui', { addresses: [{ callsign: destCallsign, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.UI, payload }, frame);
+    const addresses = [{ callsign: destCallsign, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }, ...((path || []).map((p) => {
+      const m = String(p).toUpperCase().match(/^([A-Z0-9]{1,6})(?:-(\d+))?$/);
+      return m ? { callsign: m[1], ssid: Number(m[2] || 0) } : { callsign: p, ssid: 0 };
+    }))];
+    this._emitMonitor(t, radio, 'tx', 'ui', { addresses, control: CTL.UI, payload }, frame);
   }
 
   // ---- outbound: connected-mode sessions ----

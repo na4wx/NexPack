@@ -7,7 +7,7 @@ const TYPE_LABELS = {
   serial: 'Serial (KISS)',
   'kiss-tcp': 'KISS over TCP',
   agwpe: 'AGWPE',
-  soundmodem: 'Built-in Sound Modem (Direwolf)'
+  soundmodem: 'Built-in Sound Modem (Direwolf) — Experimental'
 };
 
 const PTT_METHOD_LABELS = {
@@ -151,6 +151,11 @@ export default function AddTncDialog({ open, onClose, onCreated }) {
                   helperText="Leave blank to let Direwolf auto-detect the first CM108-family USB sound fob."
                 />
               )}
+              <Alert severity="warning">
+                <strong>Experimental.</strong> This feature is new and hasn't been proven against
+                real on-air traffic yet — expect rough edges, and prefer a hardware TNC/AGWPE host
+                for anything you depend on.
+              </Alert>
               <Alert severity="info">
                 This uses Direwolf (github.com/wb2osz/direwolf) as the modem — a build of it ships
                 with NexPack, so nothing extra to install on macOS/Linux/Windows. If it's ever missing

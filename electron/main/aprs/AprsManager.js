@@ -14,6 +14,20 @@ const MAX_PACKET_LOG = 50;
 const MESSAGE_RETRY_MS = 45000;
 const MESSAGE_MAX_RETRIES = 4;
 
+// The AX.25 destination address on every outgoing APRS packet ("tocall") is
+// supposed to identify the originating software — real clients use one
+// registered with aprs.org's tocalls.txt (UI-View32 is "APU25N", APRSIS32
+// is "APDW..", etc; see the examples in the bug report this constant fixes:
+// "To APU25N", "To APMI0A" — never literally "To APRS"). NexPack has no
+// registered tocall of its own, so it uses "APZ" + a short suffix, which
+// tocalls.txt explicitly reserves for unregistered/experimental software —
+// exactly what this feature is labeled as in the UI. Previously this sent
+// the literal string 'APRS' as the destination, which isn't a valid tocall
+// at all; nothing enforces the registry so it didn't corrupt frames, but it
+// meant NexPack's own beacons were unidentifiable as NexPack traffic to
+// anything that looks at the tocall (aprs.fi, other clients' station info).
+const APRS_TOCALL = 'APZNXP';
+
 function distanceBearing(lat1, lon1, lat2, lon2) {
   const R = 3958.8; // miles
   const toRad = (d) => (d * Math.PI) / 180;
@@ -237,11 +251,17 @@ class AprsManager extends EventEmitter {
     const settings = this.getSettings();
     const beacon = settings.myStation.beacon || {};
     if (beacon.tncId && beacon.radioId) {
-      try { this.tncManager.sendUnproto(beacon.tncId, beacon.radioId, 'APRS', packet); } catch (e) { this.emit('aprs-error', { message: `RF transmit failed: ${e.message}` }); }
+      // beacon.path (e.g. "WIDE1-1,WIDE2-1", set in AprsSettingsPanel) was
+      // being saved correctly but never actually read here — every RF
+      // packet went out with no digipeater path at all regardless of this
+      // setting, which is why NexPack's own beacons showed no "Via" hops
+      // while every other station on frequency did.
+      const path = String(beacon.path || '').split(',').map((s) => s.trim()).filter(Boolean);
+      try { this.tncManager.sendUnproto(beacon.tncId, beacon.radioId, APRS_TOCALL, packet, path); } catch (e) { this.emit('aprs-error', { message: `RF transmit failed: ${e.message}` }); }
     }
     if (settings.aprsIs.txPasscode && this.aprsIsSocket && !this.aprsIsSocket.destroyed) {
       const mycall = (settings.myStation.mycall || settings.aprsIs.callsign || 'N0CALL').toUpperCase();
-      this.aprsIsSocket.write(`${mycall}>APRS,TCPIP*:${packet}\r\n`);
+      this.aprsIsSocket.write(`${mycall}>${APRS_TOCALL},TCPIP*:${packet}\r\n`);
     }
   }
 
