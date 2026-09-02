@@ -11,10 +11,77 @@ import PersonIcon from '@mui/icons-material/Person';
 import ChatIcon from '@mui/icons-material/Chat';
 import PlaceIcon from '@mui/icons-material/Place';
 import CloseIcon from '@mui/icons-material/Close';
+import RouterIcon from '@mui/icons-material/Router';
+import SendIcon from '@mui/icons-material/Send';
+import VerticalSplitIcon from '@mui/icons-material/VerticalSplit';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CachedOsmTileLayer from '../aprs/CachedOsmTileLayer';
 import { getStationIconHtml, GLYPHS } from '../aprs/aprsIcons';
+import MonitorPane from '../components/MonitorPane';
 
 const STALE_MS = 30 * 60 * 1000; // 30 minutes — matches typical real-client defaults (UI-View etc.)
+const MAX_MONITOR_EVENTS = 3000;
+const DOCK_WIDTH = 340;
+
+// Lightweight drag-to-resize for a panel's width — no extra dependency,
+// just a narrow draggable strip plus a hook tracking the width. `edge`
+// says which side of the panel the handle (and the panel itself) is on:
+// 'right' for a panel anchored to the left (dragging right grows it, like
+// the station list), 'left' for a panel anchored to the right (dragging
+// left grows it, like the docked Messages/Monitor/station-detail panels).
+// Width persists per-panel across restarts via localStorage.
+function useResizableWidth(storageKey, defaultWidth, { min = 220, max = 640, edge = 'right' } = {}) {
+  const [width, setWidth] = useState(() => {
+    try {
+      const saved = Number(window.localStorage.getItem(storageKey));
+      return saved >= min && saved <= max ? saved : defaultWidth;
+    } catch (e) { return defaultWidth; }
+  });
+  const drag = useRef(null);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!drag.current) return;
+      const delta = e.clientX - drag.current.startX;
+      const signedDelta = edge === 'right' ? delta : -delta;
+      const next = Math.min(max, Math.max(min, drag.current.startWidth + signedDelta));
+      setWidth(next);
+    };
+    const onUp = () => {
+      if (!drag.current) return;
+      drag.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [edge, min, max]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(storageKey, String(width)); } catch (e) { /* ignore */ }
+  }, [storageKey, width]);
+
+  const onMouseDown = (e) => {
+    drag.current = { startX: e.clientX, startWidth: width };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  return [width, onMouseDown];
+}
+
+function ResizeHandle({ onMouseDown }) {
+  return (
+    <Box
+      onMouseDown={onMouseDown}
+      sx={{
+        width: 6, flexShrink: 0, cursor: 'col-resize', alignSelf: 'stretch',
+        '&:hover': { bgcolor: 'action.hover' }
+      }}
+    />
+  );
+}
 
 function stationIcon(symbol) {
   return L.divIcon({ html: getStationIconHtml(symbol), className: '', iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -14] });
@@ -59,13 +126,30 @@ function SymbolPicker({ value, onChange }) {
   );
 }
 
-function MessagesDialog({ open, onClose, initialTarget }) {
+// Shared title bar for anything that can either float as a modal Dialog or
+// dock in the strip to the right of the map — same content component is
+// used in both places, this just gives it a consistent header with a
+// dock/undock toggle plus a close button.
+function DockableHeader({ title, docked, onToggleDock, onClose }) {
+  return (
+    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ px: docked ? 1.5 : 3, py: docked ? 1 : 1.5, borderBottom: docked ? 1 : 0, borderColor: 'divider' }}>
+      <Typography variant={docked ? 'subtitle1' : 'h6'} sx={{ flexGrow: 1 }}>{title}</Typography>
+      <Tooltip title={docked ? 'Open as a window' : 'Dock to the side'}>
+        <IconButton size="small" onClick={onToggleDock}>
+          {docked ? <OpenInNewIcon fontSize="small" /> : <VerticalSplitIcon fontSize="small" />}
+        </IconButton>
+      </Tooltip>
+      <IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
+    </Stack>
+  );
+}
+
+function MessagesContent({ initialTarget }) {
   const [messages, setMessages] = useState([]);
   const [target, setTarget] = useState('');
   const [text, setText] = useState('');
 
   useEffect(() => {
-    if (!open) return;
     window.nexdigi.aprsGetMessages().then(setMessages);
     setTarget(initialTarget || '');
     const off = window.nexdigi.onAprsMessage((entry) => {
@@ -78,7 +162,7 @@ function MessagesDialog({ open, onClose, initialTarget }) {
       });
     });
     return off;
-  }, [open, initialTarget]);
+  }, [initialTarget]);
 
   const conversations = useMemo(() => {
     const set = new Set(messages.map((m) => m.callsign));
@@ -97,47 +181,92 @@ function MessagesDialog({ open, onClose, initialTarget }) {
   const cancel = (msgId) => window.nexdigi.aprsCancelMessage(msgId);
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>APRS Messages</DialogTitle>
-      <DialogContent sx={{ display: 'flex', gap: 2, height: 420, p: 0 }}>
-        <Box sx={{ width: 160, borderRight: 1, borderColor: 'divider', overflowY: 'auto' }}>
-          <List dense>
-            {conversations.map((c) => (
-              <ListItemButton key={c} selected={c === target} onClick={() => setTarget(c)}>
-                <ListItemText primary={c} />
-              </ListItemButton>
-            ))}
-          </List>
-        </Box>
-        <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 1, minWidth: 0 }}>
-          <TextField size="small" label="To callsign" value={target} onChange={(e) => setTarget(e.target.value.toUpperCase())} sx={{ mb: 1 }} />
-          <Box sx={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-            {thread.map((m) => (
-              <Box key={m.id} sx={{ alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
-                <Box sx={{ bgcolor: m.direction === 'out' ? 'primary.dark' : 'action.selected', borderRadius: 1, px: 1, py: 0.5 }}>
-                  <Typography variant="body2">{m.text}</Typography>
-                </Box>
-                {m.direction === 'out' && (
-                  <Chip
-                    size="small"
-                    label={m.status}
-                    color={statusColor[m.status] || 'default'}
-                    sx={{ mt: 0.3 }}
-                    onDelete={m.status === 'sent' ? () => cancel(m.msgId) : undefined}
-                    deleteIcon={m.status === 'sent' ? <Tooltip title="Cancel — stop retrying"><CloseIcon fontSize="small" /></Tooltip> : undefined}
-                  />
-                )}
+    <Box sx={{ display: 'flex', gap: 2, flexGrow: 1, minHeight: 0, p: 0 }}>
+      <Box sx={{ width: 140, flexShrink: 0, borderRight: 1, borderColor: 'divider', overflowY: 'auto' }}>
+        <List dense>
+          {conversations.map((c) => (
+            <ListItemButton key={c} selected={c === target} onClick={() => setTarget(c)}>
+              <ListItemText primary={c} />
+            </ListItemButton>
+          ))}
+        </List>
+      </Box>
+      <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 1, minWidth: 0 }}>
+        <TextField size="small" label="To callsign" value={target} onChange={(e) => setTarget(e.target.value.toUpperCase())} sx={{ mb: 1 }} />
+        <Box sx={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          {thread.map((m) => (
+            <Box key={m.id} sx={{ alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start', maxWidth: '90%' }}>
+              <Box sx={{ bgcolor: m.direction === 'out' ? 'primary.dark' : 'action.selected', borderRadius: 1, px: 1, py: 0.5 }}>
+                <Typography variant="body2">{m.text}</Typography>
               </Box>
-            ))}
-            {thread.length === 0 && <Typography variant="body2" color="text.secondary">No messages with this station yet.</Typography>}
-          </Box>
-          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <TextField size="small" fullWidth placeholder="Message text (max 67 chars)" value={text} onChange={(e) => setText(e.target.value.slice(0, 67))} onKeyDown={(e) => { if (e.key === 'Enter') send(); }} />
-            <Button variant="contained" onClick={send} disabled={!target.trim() || !text.trim()}>Send</Button>
-          </Stack>
+              {m.direction === 'out' && (
+                <Chip
+                  size="small"
+                  label={m.status}
+                  color={statusColor[m.status] || 'default'}
+                  sx={{ mt: 0.3 }}
+                  onDelete={m.status === 'sent' ? () => cancel(m.msgId) : undefined}
+                  deleteIcon={m.status === 'sent' ? <Tooltip title="Cancel — stop retrying"><CloseIcon fontSize="small" /></Tooltip> : undefined}
+                />
+              )}
+            </Box>
+          ))}
+          {thread.length === 0 && <Typography variant="body2" color="text.secondary">No messages with this station yet.</Typography>}
+        </Box>
+        <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+          <TextField size="small" fullWidth placeholder="Message text (max 67 chars)" value={text} onChange={(e) => setText(e.target.value.slice(0, 67))} onKeyDown={(e) => { if (e.key === 'Enter') send(); }} />
+          <Button variant="contained" onClick={send} disabled={!target.trim() || !text.trim()}>Send</Button>
+        </Stack>
+      </Box>
+    </Box>
+  );
+}
+
+function MessagesPanel({ open, docked, onClose, onToggleDock, initialTarget, width }) {
+  if (!open) return null;
+  if (docked) {
+    return (
+      <Box sx={{ width, flexShrink: 0, borderLeft: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column' }}>
+        <DockableHeader title="Messages" docked onToggleDock={onToggleDock} onClose={onClose} />
+        <MessagesContent initialTarget={initialTarget} />
+      </Box>
+    );
+  }
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+      <DockableHeader title="APRS Messages" docked={false} onToggleDock={onToggleDock} onClose={onClose} />
+      <DialogContent sx={{ display: 'flex', height: 420, p: 0 }}>
+        <MessagesContent initialTarget={initialTarget} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PacketMonitorPanel({ open, docked, onClose, onToggleDock, events, width }) {
+  if (!open) return null;
+  // MonitorPane fills its immediate parent via height:100%, which only
+  // resolves against a parent that's itself a sized flex item — the same
+  // { flexGrow: 1, minHeight: 0 } wrapper TerminalWorkspace already uses
+  // around it, needed here too or it collapses to zero height inside these
+  // flex-column containers.
+  if (docked) {
+    return (
+      <Box sx={{ width, flexShrink: 0, borderLeft: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column' }}>
+        <DockableHeader title="Packet Monitor" docked onToggleDock={onToggleDock} onClose={onClose} />
+        <Box sx={{ flexGrow: 1, minHeight: 0 }}>
+          <MonitorPane events={events} />
+        </Box>
+      </Box>
+    );
+  }
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="md">
+      <DockableHeader title="Packet Monitor" docked={false} onToggleDock={onToggleDock} onClose={onClose} />
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', height: 520, p: 0 }}>
+        <Box sx={{ flexGrow: 1, minHeight: 0 }}>
+          <MonitorPane events={events} />
         </Box>
       </DialogContent>
-      <DialogActions><Button onClick={onClose}>Close</Button></DialogActions>
     </Dialog>
   );
 }
@@ -203,11 +332,11 @@ function ObjectsDialog({ open, onClose }) {
   );
 }
 
-function StationDetailPanel({ station, onClose, onMessage }) {
+function StationDetailPanel({ station, onClose, onMessage, width }) {
   if (!station) return null;
   const t = station.telemetry;
   return (
-    <Box sx={{ width: 320, borderLeft: 1, borderColor: 'divider', overflowY: 'auto', p: 1.5 }}>
+    <Box sx={{ width, flexShrink: 0, borderLeft: 1, borderColor: 'divider', overflowY: 'auto', p: 1.5 }}>
       <Stack direction="row" alignItems="center" spacing={1}>
         <Typography variant="h6" sx={{ flexGrow: 1 }}>{station.callsign}</Typography>
         <IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
@@ -273,11 +402,18 @@ export default function AprsWorkspace({ onOpenSettings }) {
   const [selectedCallsign, setSelectedCallsign] = useState(null);
   const [search, setSearch] = useState('');
   const [messagesOpen, setMessagesOpen] = useState(false);
+  const [messagesDocked, setMessagesDocked] = useState(false);
+  const [monitorOpen, setMonitorOpen] = useState(false);
+  const [monitorDocked, setMonitorDocked] = useState(false);
+  const [monitorEvents, setMonitorEvents] = useState([]);
   const [objectsOpen, setObjectsOpen] = useState(false);
   const [messageTarget, setMessageTarget] = useState('');
   const [aprsIsConnected, setAprsIsConnected] = useState(false);
   const [unread, setUnread] = useState(0);
   const [homePosition, setHomePosition] = useState(null);
+  const [beaconText, setBeaconText] = useState('');
+  const [beaconSaving, setBeaconSaving] = useState(false);
+  const [beaconError, setBeaconError] = useState('');
 
   useEffect(() => {
     window.nexdigi.aprsGetStations().then((list) => {
@@ -290,7 +426,7 @@ export default function AprsWorkspace({ onOpenSettings }) {
       for (const o of list || []) map[o.name] = o;
       setObjects(map);
     });
-    window.nexdigi.aprsGetMyStation().then((my) => setHomePosition(my.homePosition || null));
+    window.nexdigi.aprsGetMyStation().then((my) => { setHomePosition(my.homePosition || null); setBeaconText(my.comment || ''); });
     const offStation = window.nexdigi.onAprsStation((record) => {
       setStations((prev) => ({ ...prev, [record.callsign]: record }));
     });
@@ -299,18 +435,27 @@ export default function AprsWorkspace({ onOpenSettings }) {
     const offMessage = window.nexdigi.onAprsMessage((entry) => {
       if (entry.direction === 'in' && !entry.read && !messagesOpen) setUnread((n) => n + 1);
     });
-    return () => { offStation(); offStatus(); offObject(); offMessage(); };
+    const offMonitor = window.nexdigi.onMonitor((evt) => {
+      setMonitorEvents((prev) => {
+        const next = prev.length >= MAX_MONITOR_EVENTS ? prev.slice(prev.length - MAX_MONITOR_EVENTS + 1) : prev.slice();
+        next.push(evt);
+        return next;
+      });
+    });
+    return () => { offStation(); offStatus(); offObject(); offMessage(); offMonitor(); };
   }, [messagesOpen]);
 
+  // Always most-recently-heard first — a distance-based re-sort used to run
+  // whenever a home position was set (i.e. almost always), which silently
+  // overrode this and buried stations that had just been heard.
   const list = useMemo(() => {
     let all = Object.values(stations).sort((a, b) => b.lastSeen - a.lastSeen);
     if (search.trim()) {
       const q = search.trim().toUpperCase();
       all = all.filter((s) => s.callsign.includes(q));
     }
-    if (homePosition) all = all.slice().sort((a, b) => (a.distanceMiles ?? Infinity) - (b.distanceMiles ?? Infinity));
     return all;
-  }, [stations, search, homePosition]);
+  }, [stations, search]);
 
   const withPosition = list.filter((s) => s.lastPosition);
   const objectList = Object.values(objects).filter((o) => !o.killed && o.lat !== undefined);
@@ -323,9 +468,33 @@ export default function AprsWorkspace({ onOpenSettings }) {
     setMessagesOpen(true);
   };
 
+  const toggleMonitor = () => {
+    if (monitorOpen) { setMonitorOpen(false); return; }
+    setMonitorOpen(true);
+  };
+
+  const sendBeacon = async () => {
+    setBeaconSaving(true);
+    setBeaconError('');
+    try {
+      const my = await window.nexdigi.aprsGetMyStation();
+      await window.nexdigi.aprsSaveMyStation({ ...my, comment: beaconText.trim() });
+      await window.nexdigi.aprsBeaconNow();
+    } catch (e) {
+      setBeaconError(e.message || String(e));
+    } finally {
+      setBeaconSaving(false);
+    }
+  };
+
+  const [sidebarWidth, onSidebarResizeStart] = useResizableWidth('aprs.sidebarWidth', 280, { min: 220, max: 480, edge: 'right' });
+  const [detailWidth, onDetailResizeStart] = useResizableWidth('aprs.detailWidth', 320, { min: 260, max: 560, edge: 'left' });
+  const [messagesWidth, onMessagesResizeStart] = useResizableWidth('aprs.messagesWidth', DOCK_WIDTH, { min: 280, max: 640, edge: 'left' });
+  const [monitorWidth, onMonitorResizeStart] = useResizableWidth('aprs.monitorWidth', 480, { min: 320, max: 800, edge: 'left' });
+
   return (
     <Box sx={{ display: 'flex', height: '100%' }}>
-      <Box sx={{ width: 280, borderRight: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ width: sidebarWidth, flexShrink: 0, borderRight: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column' }}>
         <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 1 }}>
           <Chip size="small" label={aprsIsConnected ? 'APRS-IS connected' : 'APRS-IS off'} color={aprsIsConnected ? 'success' : 'default'} />
           <Box sx={{ flexGrow: 1 }} />
@@ -335,9 +504,26 @@ export default function AprsWorkspace({ onOpenSettings }) {
               <Badge badgeContent={unread} color="error"><ChatIcon fontSize="small" /></Badge>
             </IconButton>
           </Tooltip>
+          <Tooltip title="Packet monitor"><IconButton size="small" onClick={toggleMonitor}><RouterIcon fontSize="small" /></IconButton></Tooltip>
           <Tooltip title="Objects"><IconButton size="small" onClick={() => setObjectsOpen(true)}><PlaceIcon fontSize="small" /></IconButton></Tooltip>
           <Tooltip title="APRS settings"><IconButton size="small" onClick={() => onOpenSettings('aprs')}><SettingsIcon fontSize="small" /></IconButton></Tooltip>
         </Stack>
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ px: 1, mb: 1 }}>
+          <TextField
+            size="small"
+            fullWidth
+            placeholder="Beacon text / status"
+            value={beaconText}
+            onChange={(e) => setBeaconText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') sendBeacon(); }}
+          />
+          <Tooltip title="Save and beacon now">
+            <span>
+              <IconButton size="small" onClick={sendBeacon} disabled={beaconSaving}><SendIcon fontSize="small" /></IconButton>
+            </span>
+          </Tooltip>
+        </Stack>
+        {beaconError && <Typography variant="caption" color="error.main" sx={{ px: 1, mb: 1 }}>{beaconError}</Typography>}
         <TextField size="small" placeholder="Search callsign…" value={search} onChange={(e) => setSearch(e.target.value)} sx={{ mx: 1, mb: 1 }} />
         <List dense sx={{ overflowY: 'auto', flexGrow: 1 }}>
           {list.length === 0 && <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>No stations heard yet.</Typography>}
@@ -351,6 +537,7 @@ export default function AprsWorkspace({ onOpenSettings }) {
           ))}
         </List>
       </Box>
+      <ResizeHandle onMouseDown={onSidebarResizeStart} />
 
       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
         <MapContainer center={defaultCenter} zoom={withPosition.length ? 8 : 4} style={{ height: '100%', width: '100%', background: '#0d1117' }}>
@@ -389,10 +576,32 @@ export default function AprsWorkspace({ onOpenSettings }) {
       </Box>
 
       {selected && (
-        <StationDetailPanel station={selected} onClose={() => setSelectedCallsign(null)} onMessage={openMessages} />
+        <>
+          <ResizeHandle onMouseDown={onDetailResizeStart} />
+          <StationDetailPanel station={selected} onClose={() => setSelectedCallsign(null)} onMessage={openMessages} width={detailWidth} />
+        </>
       )}
 
-      <MessagesDialog open={messagesOpen} onClose={() => setMessagesOpen(false)} initialTarget={messageTarget} />
+      {messagesOpen && messagesDocked && <ResizeHandle onMouseDown={onMessagesResizeStart} />}
+      <MessagesPanel
+        open={messagesOpen}
+        docked={messagesDocked}
+        onClose={() => setMessagesOpen(false)}
+        onToggleDock={() => setMessagesDocked((d) => !d)}
+        initialTarget={messageTarget}
+        width={messagesWidth}
+      />
+
+      {monitorOpen && monitorDocked && <ResizeHandle onMouseDown={onMonitorResizeStart} />}
+      <PacketMonitorPanel
+        open={monitorOpen}
+        docked={monitorDocked}
+        onClose={() => setMonitorOpen(false)}
+        onToggleDock={() => setMonitorDocked((d) => !d)}
+        events={monitorEvents}
+        width={monitorWidth}
+      />
+
       <ObjectsDialog open={objectsOpen} onClose={() => setObjectsOpen(false)} />
     </Box>
   );
