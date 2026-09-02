@@ -210,6 +210,16 @@ class AprsManager extends EventEmitter {
     if (evt.frameType !== 'ui' || !evt.text) return;
     const srcAddr = (evt.addresses && evt.addresses[1]) || null;
     if (!srcAddr) return;
+    // A digipeater repeating our own transmission comes back as a genuine
+    // 'rx' event (this is real RF reception, not the local TX-loopback the
+    // check above already handles) whose source just happens to be us.
+    // Without this, hearing your own message get digipeated files it as a
+    // brand new INCOMING message from yourself (reported live: "the
+    // message shows up to me... as if I am messaging myself") — same
+    // problem for any other packet type, so this is checked once here
+    // rather than in each individual handler.
+    const myBase = (this.getMyStation().mycall || '').toUpperCase().replace(/-\d+$/, '');
+    if (myBase && srcAddr.toUpperCase().replace(/-\d+$/, '') === myBase) return;
     let destBytes = null;
     if (evt.raw) {
       try { destBytes = Buffer.from(Buffer.from(evt.raw, 'hex').slice(0, 6)).map((b) => b >> 1); } catch (e) { /* ignore */ }

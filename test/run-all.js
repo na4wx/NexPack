@@ -16,6 +16,7 @@ const files = [
   'test_terminal_yapp.js',
   'test_terminal_scripts.js',
   'test_rf_bbs_client.js',
+  'test_rf_chat_client.js',
   'test_winlink_orphan_reap.js',
   'test_winlink_connect_guard.js',
   'test_winlink_start_race.js',
@@ -28,7 +29,8 @@ const files = [
   'test_map_tile_cache.js',
   'test_settings_page_backend.js',
   'test_inbound_node_server.js',
-  'test_soundmodem_manager.js'
+  'test_soundmodem_manager.js',
+  'test_update_checker.js'
 ];
 
 let failed = 0;

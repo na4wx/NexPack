@@ -92,6 +92,8 @@ contextBridge.exposeInMainWorld('nexdigi', {
   chatGetRoomUsers: (name) => ipcRenderer.invoke('chat:getRoomUsers', name),
   chatSendMessage: (text) => ipcRenderer.invoke('chat:sendMessage', text),
   chatSendTyping: (typing) => ipcRenderer.invoke('chat:sendTyping', typing),
+  chatGetTransport: () => ipcRenderer.invoke('chatFacade:getTransport'),
+  chatSetTransport: (transport) => ipcRenderer.invoke('chatFacade:setTransport', transport),
   // A single generic event carries every real server message (see
   // ChatManager.js for why — the server's own 'chat-broadcast' wrapper type
   // never actually arrives on the wire; this dispatches on msg.type itself).
@@ -123,6 +125,9 @@ contextBridge.exposeInMainWorld('nexdigi', {
   terminalSaveSettings: (settings) => ipcRenderer.invoke('terminal:saveSettings', settings),
   inboundServerGetSettings: () => ipcRenderer.invoke('inboundServer:getSettings'),
   inboundServerSaveSettings: (settings) => ipcRenderer.invoke('inboundServer:saveSettings', settings),
+
+  checkForUpdate: () => ipcRenderer.invoke('update:check'),
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   onAprsStation: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-station', l); return () => ipcRenderer.removeListener('aprs-station', l); },
   onAprsIsStatus: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-is-status', l); return () => ipcRenderer.removeListener('aprs-is-status', l); },
   onAprsMessage: (cb) => { const l = (_e, evt) => cb(evt); ipcRenderer.on('aprs-message', l); return () => ipcRenderer.removeListener('aprs-message', l); },

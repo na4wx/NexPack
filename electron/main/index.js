@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const TncManager = require('./tnc/TncManager');
 const ScriptManager = require('./tnc/ScriptManager');
@@ -8,11 +8,14 @@ const NexDigiClient = require('./bbs/NexDigiClient');
 const RfBbsClient = require('./bbs/RfBbsClient');
 const BbsFacade = require('./bbs/BbsFacade');
 const ChatManager = require('./chat/ChatManager');
+const RfChatClient = require('./chat/RfChatClient');
+const ChatFacade = require('./chat/ChatFacade');
 const AprsManager = require('./aprs/AprsManager');
 const MapTileCache = require('./maps/MapTileCache');
 const TerminalSettings = require('./settings/TerminalSettings');
 const InboundServerSettings = require('./settings/InboundServerSettings');
 const InboundNodeServer = require('./tnc/InboundNodeServer');
+const UpdateChecker = require('./UpdateChecker');
 
 let mainWindow;
 let tncManager;
@@ -23,11 +26,14 @@ let nexDigiClient;
 let rfBbsClient;
 let bbsFacade;
 let chatManager;
+let rfChatClient;
+let chatFacade;
 let aprsManager;
 let mapTileCache;
 let terminalSettings;
 let inboundServerSettings;
 let inboundNodeServer;
+let updateChecker;
 
 function forwardToRenderer(eventName) {
   tncManager.on(eventName, (payload) => {
@@ -64,11 +70,14 @@ app.whenReady().then(() => {
   rfBbsClient = new RfBbsClient({ userDataDir: app.getPath('userData'), tncManager });
   bbsFacade = new BbsFacade({ userDataDir: app.getPath('userData'), nexDigiClient, rfBbsClient });
   chatManager = new ChatManager({ nexDigiClient });
+  rfChatClient = new RfChatClient({ tncManager, rfBbsClient });
+  chatFacade = new ChatFacade({ userDataDir: app.getPath('userData'), chatManager, rfChatClient });
   aprsManager = new AprsManager({ userDataDir: app.getPath('userData'), tncManager });
   mapTileCache = new MapTileCache({ userDataDir: app.getPath('userData') });
   terminalSettings = new TerminalSettings({ userDataDir: app.getPath('userData') });
   inboundServerSettings = new InboundServerSettings({ userDataDir: app.getPath('userData') });
   inboundNodeServer = new InboundNodeServer({ tncManager, bbsFacade, nexDigiClient, terminalSettings, inboundServerSettings });
+  updateChecker = new UpdateChecker({ currentVersion: app.getVersion() });
 
   // TncManager only emits its own 'error' (as opposed to per-adapter errors,
   // which it already absorbs itself) when persisting tncs.json fails — rare,
@@ -88,8 +97,14 @@ app.whenReady().then(() => {
   // same 'error'-with-zero-listeners crash class documented above for pat.
   soundModemManager.on('error', ({ tncId, error }) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('soundmodem-log', { tncId, line: `ERROR: ${error.message}\n` }); });
 
+  // Both transports (ChatManager over HTTP/WS, RfChatClient over AX.25) are
+  // forwarded to the same renderer channels — only one is ever active per
+  // ChatFacade.getTransport(), and the renderer doesn't need to know which.
   for (const evt of ['chat-event', 'chat-error', 'chat-socket-closed']) {
     chatManager.on(evt, (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(evt, payload); });
+  }
+  for (const evt of ['chat-event', 'chat-error']) {
+    rfChatClient.on(evt, (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(evt, payload); });
   }
 
   for (const evt of ['aprs-station', 'aprs-is-status', 'aprs-message', 'aprs-object', 'aprs-beacon-sent', 'aprs-error']) {
@@ -188,14 +203,16 @@ app.whenReady().then(() => {
   ipcMain.handle('rfBbs:saveSettings', (_e, settings) => rfBbsClient.saveSettings(settings));
 
   // Chat (via NexDigi server REST + shared WebSocket)
-  ipcMain.handle('chat:connect', () => chatManager.connect());
-  ipcMain.handle('chat:disconnect', () => chatManager.disconnect());
-  ipcMain.handle('chat:listRooms', () => chatManager.listRooms());
-  ipcMain.handle('chat:createRoom', (_e, name, description) => chatManager.createRoom(name, description));
-  ipcMain.handle('chat:switchRoom', (_e, name) => chatManager.switchRoom(name));
-  ipcMain.handle('chat:getRoomUsers', (_e, name) => chatManager.getRoomUsers(name));
-  ipcMain.handle('chat:sendMessage', (_e, text) => chatManager.sendMessage(text));
-  ipcMain.handle('chat:sendTyping', (_e, typing) => chatManager.sendTyping(typing));
+  ipcMain.handle('chat:connect', () => chatFacade.connect());
+  ipcMain.handle('chat:disconnect', () => chatFacade.disconnect());
+  ipcMain.handle('chat:listRooms', () => chatFacade.listRooms());
+  ipcMain.handle('chat:createRoom', (_e, name, description) => chatFacade.createRoom(name, description));
+  ipcMain.handle('chat:switchRoom', (_e, name) => chatFacade.switchRoom(name));
+  ipcMain.handle('chat:getRoomUsers', (_e, name) => chatFacade.getRoomUsers(name));
+  ipcMain.handle('chat:sendMessage', (_e, text) => chatFacade.sendMessage(text));
+  ipcMain.handle('chat:sendTyping', (_e, typing) => chatFacade.sendTyping(typing));
+  ipcMain.handle('chatFacade:getTransport', () => chatFacade.getTransport());
+  ipcMain.handle('chatFacade:setTransport', (_e, transport) => chatFacade.setTransport(transport));
 
   // APRS (RF via TncManager, always-on if TNCs are configured; APRS-IS optional)
   ipcMain.handle('aprs:getStations', () => aprsManager.getStations());
@@ -224,14 +241,36 @@ app.whenReady().then(() => {
   ipcMain.handle('inboundServer:getSettings', () => inboundServerSettings.getSettings());
   ipcMain.handle('inboundServer:saveSettings', (_e, settings) => inboundServerSettings.saveSettings(settings));
 
+  ipcMain.handle('update:check', () => updateChecker.checkForUpdate());
+  ipcMain.handle('shell:openExternal', (_e, url) => shell.openExternal(url));
+
   createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
+  // Launch-time check: silent on failure (offline, rate-limited, whatever —
+  // this shouldn't nag or error out on every single startup) and only
+  // interrupts the user with a real dialog when there's actually something
+  // to offer. The in-app "Check for updates" button (Settings -> About)
+  // covers the on-demand case and surfaces errors there instead.
+  updateChecker.checkForUpdate().then((result) => {
+    if (!result.updateAvailable || !mainWindow || mainWindow.isDestroyed()) return;
+    return dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      buttons: ['Download', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Update available',
+      message: `NexPack ${result.latestVersion} is available — you have ${result.currentVersion}.`,
+      detail: 'Open the release page to download it?'
+    }).then(({ response }) => { if (response === 0) shell.openExternal(result.releaseUrl); });
+  }).catch((e) => console.error('Startup update check failed (non-fatal):', e.message));
 });
 
 app.on('window-all-closed', () => {
+  if (rfChatClient) rfChatClient.disconnect();
   if (tncManager) tncManager.shutdown();
   if (chatManager) chatManager.disconnect();
   if (aprsManager) aprsManager.shutdown();

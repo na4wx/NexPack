@@ -5,13 +5,15 @@ import BbsSettingsPanel from '../components/settings/BbsSettingsPanel';
 import WinlinkSettingsPanel from '../components/settings/WinlinkSettingsPanel';
 import ChatSettingsPanel from '../components/settings/ChatSettingsPanel';
 import AprsSettingsPanel from '../components/settings/AprsSettingsPanel';
+import AboutSettingsPanel from '../components/settings/AboutSettingsPanel';
 
 const TABS = [
   { key: 'terminal', label: 'Terminal' },
   { key: 'bbs', label: 'BBS' },
   { key: 'winlink', label: 'Winlink' },
   { key: 'chat', label: 'Chat' },
-  { key: 'aprs', label: 'APRS' }
+  { key: 'aprs', label: 'APRS' },
+  { key: 'about', label: 'About' }
 ];
 
 export default function SettingsPage({ tncs, initialTab }) {
@@ -33,6 +35,7 @@ export default function SettingsPage({ tncs, initialTab }) {
         {tab === 'winlink' && <WinlinkSettingsPanel />}
         {tab === 'chat' && <ChatSettingsPanel tncs={tncs} />}
         {tab === 'aprs' && <AprsSettingsPanel tncs={tncs} />}
+        {tab === 'about' && <AboutSettingsPanel />}
       </Box>
     </Box>
   );

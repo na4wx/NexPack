@@ -54,9 +54,17 @@ export default function ChatWorkspace({ onOpenSettings }) {
   const refreshRooms = () => window.nexdigi.chatListRooms().then((r) => setRooms(r || []));
 
   const boot = async () => {
-    const settings = await window.nexdigi.bbsGetSettings();
-    setConfigured(!!settings);
-    if (!settings) return;
+    // "Configured" means different things per transport: HTTP needs a
+    // NexDigi server saved on the BBS tab; RF needs a TNC/radio/BBS
+    // callsign saved there instead (chat rides that same RF BBS session —
+    // see ChatSettingsPanel). Checking only bbsGetSettings() here would
+    // wrongly show "not configured" for a fully-configured RF setup.
+    const transport = await window.nexdigi.chatGetTransport();
+    const isConfigured = transport === 'rf'
+      ? await window.nexdigi.rfBbsGetSettings().then((s) => !!(s && s.tncId && s.radioId && s.bbsCallsign))
+      : await window.nexdigi.bbsGetSettings().then((s) => !!s);
+    setConfigured(isConfigured);
+    if (!isConfigured) return;
     await window.nexdigi.chatConnect();
     await refreshRooms();
   };

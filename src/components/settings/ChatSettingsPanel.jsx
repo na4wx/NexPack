@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Stack, TextField, Button, Typography, Divider, Switch, FormControlLabel, MenuItem } from '@mui/material';
+import { Box, Stack, TextField, Button, Typography, Divider, Switch, FormControlLabel, MenuItem, ToggleButtonGroup, ToggleButton } from '@mui/material';
 
 function radioLabel(tnc, radio) {
   return `${radio.callsign} · ${tnc.name}`;
@@ -10,6 +10,7 @@ function radioLabel(tnc, radio) {
 // separate deliberately: there's no real reason a user's Chat identity
 // needs to match their BBS posting identity.
 export default function ChatSettingsPanel({ tncs }) {
+  const [transport, setTransport] = useState('http');
   const [host, setHost] = useState('');
   const [password, setPassword] = useState('');
   const [chatCallsign, setChatCallsign] = useState('');
@@ -33,6 +34,7 @@ export default function ChatSettingsPanel({ tncs }) {
       setPassword(s.password || '');
       setChatCallsign(s.chatCallsign || s.callsign || '');
     });
+    window.nexdigi.chatGetTransport().then((t) => setTransport(t || 'http'));
     window.nexdigi.inboundServerGetSettings().then((s) => {
       setInboundEnabled(!!s.chat.enabled);
       setInboundRadioKey(s.chat.tncId && s.chat.radioId ? `${s.chat.tncId}:${s.chat.radioId}` : '');
@@ -42,6 +44,7 @@ export default function ChatSettingsPanel({ tncs }) {
 
   const save = async () => {
     await window.nexdigi.bbsSaveSettings({ host: host.trim(), password, chatCallsign: chatCallsign.trim() });
+    await window.nexdigi.chatSetTransport(transport);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -55,13 +58,29 @@ export default function ChatSettingsPanel({ tncs }) {
 
   return (
     <Stack spacing={2} sx={{ maxWidth: 480 }}>
-      <Typography variant="body2" color="text.secondary">
-        Chat runs on the same NexDigi server as BBS, so the connection below is shared with the BBS tab —
-        saving here updates it for both. Your Chat callsign is its own separate identity.
-      </Typography>
-      <TextField label="Host" value={host} onChange={(e) => setHost(e.target.value)} placeholder="localhost:3010" />
-      <TextField label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-      <TextField label="Your Chat callsign" value={chatCallsign} onChange={(e) => setChatCallsign(e.target.value)} placeholder="N0CALL" />
+      <ToggleButtonGroup exclusive size="small" value={transport} onChange={(_e, v) => v && setTransport(v)}>
+        <ToggleButton value="http">Internet</ToggleButton>
+        <ToggleButton value="rf">Radio (RF)</ToggleButton>
+      </ToggleButtonGroup>
+      {transport === 'http' ? (
+        <Typography variant="body2" color="text.secondary">
+          Chat runs on the same NexDigi server as BBS, so the connection below is shared with the BBS tab —
+          saving here updates it for both. Your Chat callsign is its own separate identity.
+        </Typography>
+      ) : (
+        <Typography variant="body2" color="text.secondary">
+          Connects to the same BBS callsign configured on the BBS tab's Radio (RF) section, over AX.25 — no
+          internet required. Chat rides that same BBS session (typing CHAT once connected), so there's no
+          separate TNC/radio/callsign to set here; configure those under BBS &rarr; Radio (RF).
+        </Typography>
+      )}
+      {transport === 'http' && (
+        <>
+          <TextField label="Host" value={host} onChange={(e) => setHost(e.target.value)} placeholder="localhost:3010" />
+          <TextField label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <TextField label="Your Chat callsign" value={chatCallsign} onChange={(e) => setChatCallsign(e.target.value)} placeholder="N0CALL" />
+        </>
+      )}
       <Box>
         <Button variant="contained" onClick={save}>Save</Button>
         {saved && <Typography component="span" variant="body2" color="success.main" sx={{ ml: 2 }}>Saved</Typography>}

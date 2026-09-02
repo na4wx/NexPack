@@ -13,6 +13,7 @@ const TncManager = require('../electron/main/tnc/TncManager');
 const AprsManager = require('../electron/main/aprs/AprsManager');
 const { buildAx25Frame } = require('../electron/main/ax25/ax25');
 const { escapeFrame } = require('../electron/main/ax25/kiss');
+const { buildMessagePacket } = require('../electron/main/aprs/aprsParser');
 
 function startBridge(port) {
   return new Promise((resolve) => {
@@ -116,6 +117,28 @@ async function main() {
     const record = aprs.getStations().find((s) => s.callsign === 'N0CALL-9');
     assert.strictEqual(record.lastHeardDirect, false, 'this specific packet was digipeated');
     assert.strictEqual(record.everHeardDirect, true, 'but it was heard direct at least once before, which should stick');
+  });
+
+  await test('hearing our own message get digipeated back to us does NOT show up as a new message from ourselves', async () => {
+    // Reported live: sending an APRS message and then hearing it come back
+    // via a digipeater made it appear as a brand new INCOMING message from
+    // yourself. Configure this station's own callsign, then inject a real
+    // digipeated (H-bit set) frame whose SOURCE is that same callsign —
+    // exactly what your own receiver actually hears when a digipeater
+    // repeats something you just transmitted.
+    aprs.saveMyStation({ mycall: 'W1ABC-1', symbol: '/>', comment: '', homePosition: null, beacon: { enabled: false, intervalMinutes: 30, path: '', tncId: null, radioId: null } });
+    const before = aprs.getMessages().length;
+    const messagePayload = buildMessagePacket({ addressee: 'N0CALL-9', text: 'hello from myself, digipeated', msgId: '1' });
+
+    const raw = net.createConnection({ host: '127.0.0.1', port: bridgePort });
+    await new Promise((resolve) => raw.on('connect', resolve));
+    sendDigipeatedFrame(raw, { dest: 'APZNXP', src: 'W1ABC-1', path: ['WIDE1-1', 'WIDE2-1'], payload: messagePayload });
+    await wait(300);
+    raw.end();
+
+    const after = aprs.getMessages();
+    assert.strictEqual(after.length, before, 'no new message record should have been created from hearing our own digipeated transmission');
+    assert.ok(!after.some((m) => m.callsign === 'W1ABC-1' && m.direction === 'in'), 'there should be no incoming message that appears to be from ourselves');
   });
 
   console.log(`\nTests passed: ${pass}`);

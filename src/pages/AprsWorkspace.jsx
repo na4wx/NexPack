@@ -7,7 +7,6 @@ import {
   Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, Divider, Badge, Tooltip
 } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
-import PersonIcon from '@mui/icons-material/Person';
 import ChatIcon from '@mui/icons-material/Chat';
 import PlaceIcon from '@mui/icons-material/Place';
 import CloseIcon from '@mui/icons-material/Close';
@@ -521,7 +520,6 @@ export default function AprsWorkspace({ onOpenSettings }) {
   const [monitorEvents, setMonitorEvents] = useState([]);
   const [objectsOpen, setObjectsOpen] = useState(false);
   const [messageTarget, setMessageTarget] = useState('');
-  const [aprsIsConnected, setAprsIsConnected] = useState(false);
   const [unread, setUnread] = useState(0);
   const [homePosition, setHomePosition] = useState(null);
   const [beaconSaving, setBeaconSaving] = useState(false);
@@ -542,7 +540,6 @@ export default function AprsWorkspace({ onOpenSettings }) {
     const offStation = window.nexdigi.onAprsStation((record) => {
       setStations((prev) => ({ ...prev, [record.callsign]: record }));
     });
-    const offStatus = window.nexdigi.onAprsIsStatus((status) => setAprsIsConnected(!!status.connected));
     const offObject = window.nexdigi.onAprsObject((record) => setObjects((prev) => ({ ...prev, [record.name]: record })));
     const offMessage = window.nexdigi.onAprsMessage((entry) => {
       if (entry.direction === 'in' && !entry.read && !messagesOpen) setUnread((n) => n + 1);
@@ -554,7 +551,7 @@ export default function AprsWorkspace({ onOpenSettings }) {
         return next;
       });
     });
-    return () => { offStation(); offStatus(); offObject(); offMessage(); offMonitor(); };
+    return () => { offStation(); offObject(); offMessage(); offMonitor(); };
   }, [messagesOpen]);
 
   // Always most-recently-heard first — a distance-based re-sort used to run
@@ -617,9 +614,7 @@ export default function AprsWorkspace({ onOpenSettings }) {
     <Box sx={{ display: 'flex', height: '100%' }}>
       <Box sx={{ width: sidebarWidth, flexShrink: 0, borderRight: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column' }}>
         <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 1 }}>
-          <Chip size="small" label={aprsIsConnected ? 'APRS-IS connected' : 'APRS-IS off'} color={aprsIsConnected ? 'success' : 'default'} />
           <Box sx={{ flexGrow: 1 }} />
-          <Tooltip title="My Station"><IconButton size="small" onClick={() => onOpenSettings('aprs')}><PersonIcon fontSize="small" /></IconButton></Tooltip>
           <Tooltip title="Messages">
             <IconButton size="small" onClick={() => openMessages('')}>
               <Badge badgeContent={unread} color="error"><ChatIcon fontSize="small" /></Badge>
