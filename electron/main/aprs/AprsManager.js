@@ -48,10 +48,15 @@ function distanceBearing(lat1, lon1, lat2, lon2) {
 // telemetry) so this behaves like an actual APRS client (UI-View/
 // APRSIS32/YAAC) rather than a passive position viewer.
 class AprsManager extends EventEmitter {
-  constructor({ userDataDir, tncManager }) {
+  // appVersion: injectable for tests; defaults to reading it straight from
+  // package.json (the same source of truth every version bump in this repo
+  // already updates), so the beacon text default tracks the real running
+  // app version with no separate place to keep in sync.
+  constructor({ userDataDir, tncManager, appVersion }) {
     super();
     this.configPath = path.join(userDataDir, 'aprs.json');
     this.tncManager = tncManager;
+    this.appVersion = appVersion || require('../../../package.json').version;
     this.stations = new Map();
     this.objects = new Map();
     this.messages = []; // {id, direction, callsign, text, msgId, status, timestamp}
@@ -70,7 +75,7 @@ class AprsManager extends EventEmitter {
   getSettings() {
     const defaults = {
       aprsIs: { enabled: false, host: 'noam.aprs2.net', port: 14580, passcode: '-1', filter: '', callsign: '', txPasscode: '' },
-      myStation: { mycall: '', symbol: '/>', comment: '', homePosition: null, beacon: { enabled: false, intervalMinutes: 30, path: 'WIDE1-1,WIDE2-1', tncId: null, radioId: null } }
+      myStation: { mycall: '', symbol: '/>', comment: `NexPack v.${this.appVersion}`, homePosition: null, beacon: { enabled: false, intervalMinutes: 30, path: 'WIDE1-1,WIDE2-1', tncId: null, radioId: null } }
     };
     if (!fs.existsSync(this.configPath)) return defaults;
     try {

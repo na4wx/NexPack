@@ -71,6 +71,24 @@ async function main() {
     fs.rmSync(freshDir, { recursive: true, force: true });
   });
 
+  await test('AprsManager defaults the beacon text to "NexPack v.<version>" before anything is saved', async () => {
+    const AprsManager = require('../electron/main/aprs/AprsManager');
+    const TncManager = require('../electron/main/tnc/TncManager');
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexpack-settings-test-'));
+    const tncManager = new TncManager({});
+    const mgr = new AprsManager({ userDataDir: freshDir, tncManager, appVersion: '9.9.9' });
+    assert.strictEqual(mgr.getMyStation().comment, 'NexPack v.9.9.9');
+
+    // A real, explicit save (even to empty string) is a user choice and
+    // must not be silently overridden back to the default on reload.
+    mgr.saveMyStation({ mycall: 'N0CALL', symbol: '/>', comment: '', homePosition: null, beacon: { enabled: false, intervalMinutes: 30, path: '', tncId: null, radioId: null } });
+    const reloaded = new AprsManager({ userDataDir: freshDir, tncManager, appVersion: '9.9.9' });
+    assert.strictEqual(reloaded.getMyStation().comment, '', 'an explicit empty comment should survive, not be re-defaulted');
+
+    tncManager.shutdown();
+    fs.rmSync(freshDir, { recursive: true, force: true });
+  });
+
   console.log(`\nTests passed: ${pass}`);
   console.log(`Tests failed: ${fail}`);
 
