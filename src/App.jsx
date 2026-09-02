@@ -84,11 +84,29 @@ export default function App() {
       </Drawer>
 
       <Box sx={{ flexGrow: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
-        {page === 'terminal' && <TerminalWorkspace tncs={tncs} onOpenSettings={openSettings} />}
+        {/* The four live workspaces stay mounted at all times and are only
+            hidden via CSS — switching nav tabs used to unmount whichever
+            page you left, which threw away everything held in that page's
+            own React state (docked panel choices, the packet monitor's
+            in-memory log, list scroll/search, selection, etc.) even though
+            the underlying data was still fine on the backend. TncManager
+            and SettingsPage don't hold state worth preserving this way
+            (SettingsPage actually needs to remount to pick up a fresh
+            initialTab from openSettings()), so those two are left as
+            conditional mounts. */}
+        <Box sx={{ display: page === 'terminal' ? 'flex' : 'none', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+          <TerminalWorkspace tncs={tncs} onOpenSettings={openSettings} />
+        </Box>
+        <Box sx={{ display: page === 'winlink' ? 'flex' : 'none', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+          <MailWorkspace tncs={tncs} onOpenSettings={openSettings} />
+        </Box>
+        <Box sx={{ display: page === 'chat' ? 'flex' : 'none', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+          <ChatWorkspace onOpenSettings={openSettings} />
+        </Box>
+        <Box sx={{ display: page === 'aprs' ? 'flex' : 'none', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+          <AprsWorkspace onOpenSettings={openSettings} />
+        </Box>
         {page === 'tncs' && <TncManagerPage tncs={tncs} onChange={refresh} />}
-        {page === 'winlink' && <MailWorkspace tncs={tncs} onOpenSettings={openSettings} />}
-        {page === 'chat' && <ChatWorkspace onOpenSettings={openSettings} />}
-        {page === 'aprs' && <AprsWorkspace onOpenSettings={openSettings} />}
         {page === 'settings' && <SettingsPage tncs={tncs} initialTab={settingsTab} />}
       </Box>
     </Box>

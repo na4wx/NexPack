@@ -3,6 +3,7 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const files = [
+  'test_ax25_address_bits.js',
   'test_kiss_port_nibble.js',
   'test_terminal_kisstcp.js',
   'test_terminal_serial.js',

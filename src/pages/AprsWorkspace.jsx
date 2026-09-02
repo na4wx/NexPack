@@ -174,6 +174,25 @@ function RecenterOnSelect({ station }) {
   return null;
 }
 
+// This workspace now stays mounted (App.jsx just hides it with CSS
+// display:none instead of unmounting on nav) so its own state — docked
+// panels, monitor log, selection, etc. — survives switching tabs. Leaflet
+// computes its container size once at init and has no idea a plain CSS
+// display change later made it visible again, so without this the map
+// renders zero-height/blank the first time you actually see it. A
+// ResizeObserver on the map's own container reliably catches that
+// display:none -> visible transition (a window 'resize' event does not).
+function InvalidateSizeOnResize() {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [map]);
+  return null;
+}
+
 function SymbolPicker({ value, onChange }) {
   const codes = Object.keys(GLYPHS);
   return (
@@ -673,6 +692,7 @@ export default function AprsWorkspace({ onOpenSettings }) {
             <Polyline positions={selected.positionHistory.map((p) => [p.lat, p.lon])} pathOptions={{ color: '#5b9bff', weight: 2 }} />
           )}
           <RecenterOnSelect station={selected} />
+          <InvalidateSizeOnResize />
         </MapContainer>
       </Box>
 

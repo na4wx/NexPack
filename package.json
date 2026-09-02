@@ -1,6 +1,6 @@
 {
   "name": "nexpack",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "description": "NexPack — standalone multi-TNC/multi-radio packet terminal, Winlink+BBS, Chat, and APRS companion app for NexDigi",
   "author": "Jordan G Webb, NA4WX",

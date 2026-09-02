@@ -94,7 +94,7 @@ function serviceAddressInBuffer(rawBuf, targetCallBase) {
       if (targetSuffix !== null) {
         if (targetSuffix > 0) {
           const newSsid = Math.max(0, targetSuffix - 1);
-          let newByte = (ssidByte & 0x81) | ((newSsid & 0x0F) << 1);
+          let newByte = (ssidByte & 0xE1) | ((newSsid & 0x0F) << 1); // keep H/reserved/EA (0xE1), replace only the SSID nibble
           newByte = newByte | 0x80;
           buf[offset + 6] = newByte;
         } else {
@@ -125,13 +125,21 @@ function serviceAddressInBuffer(rawBuf, targetCallBase) {
   return buf;
 }
 
+// Address SSID octet layout (AX.25 2.0/2.2 spec, confirmed against
+// Direwolf's own ax25_pad.h/.c — SSID_RR_MASK/SSID_H_MASK): bit7 = C/R
+// (dest/src) or H — has-been-repeated (digipeater path entries), bits6-5 =
+// reserved, "normally set to 1 1", bits4-1 = SSID, bit0 = EA (last-address
+// marker, set externally by buildAx25Frame). This was previously left as
+// 0,0 — spec-noncompliant, and a real, confirmed cause of real digipeaters
+// silently ignoring our frames (found investigating "nothing is
+// digipeating me").
 function formatCallsign(callsign, ssid) {
   // produce 6-byte callsign shifted left by 1
   const cs = callsign.toUpperCase().padEnd(6, ' ');
   const bytes = Buffer.alloc(7);
   for (let i = 0; i < 6; i++) bytes[i] = cs.charCodeAt(i) << 1;
-  // SSID byte: bits 1-4 SSID, bit0 EA (set externally), we preserve other bits as zero
-  bytes[6] = ((ssid & 0x0F) << 1) & 0xFE;
+  // SSID byte: bit7 C/H (set externally), bits6-5 reserved=11, bits4-1 SSID, bit0 EA (set externally)
+  bytes[6] = 0x60 | ((ssid & 0x0F) << 1);
   return bytes;
 }
 
@@ -154,11 +162,25 @@ function buildAx25Frame(opts) {
   // AX.25 V2.0 Command/Response bit (C) usage simplified:
   // For a Command frame: set C bit (bit7) of destination, clear in source.
   // For a Response frame: clear C bit in destination, set in source.
-  // If commandType not provided, leave as default (both cleared).
-  if (commandType === 'command') {
+  // Every call site in this codebase leaves commandType unset — none of
+  // them ever passed it, connected-mode included — which meant every frame
+  // this app has ever sent went out with C=0/C=0 on dest/src. For UI
+  // frames (APRS beacons, messages, unproto) that's wrong: real APRS
+  // traffic is encoded as a command frame (dest C=1, src C=0), confirmed
+  // against how Direwolf itself builds a fresh UI frame from scratch
+  // (ax25_from_text in ax25_pad.c: SSID_H_MASK set on the destination
+  // address, not on source). Defaulting UI frames to command semantics is
+  // a real, confirmed fix for real digipeaters/software ignoring our
+  // packets. Connected-mode frames (SABM/UA/DISC/I/S) keep the old
+  // both-cleared default here deliberately — that byte pattern is already
+  // proven working over real RF across this whole project's AX.25
+  // reliability testing, and changing it wasn't needed to fix the actual
+  // reported bug, so it isn't touched.
+  const effectiveCommandType = commandType || (control === 0x03 ? 'command' : undefined);
+  if (effectiveCommandType === 'command') {
     destAddr[6] = destAddr[6] | 0x80;      // set C bit in dest
     srcAddr[6] = srcAddr[6] & ~0x80;       // clear in src
-  } else if (commandType === 'response') {
+  } else if (effectiveCommandType === 'response') {
     destAddr[6] = destAddr[6] & ~0x80;     // clear in dest
     srcAddr[6] = srcAddr[6] | 0x80;        // set in src
   }
