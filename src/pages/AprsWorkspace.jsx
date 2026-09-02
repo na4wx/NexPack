@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, Marker, Popup, Polyline, Circle, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Popup, Tooltip as LeafletTooltip, Polyline, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
@@ -662,6 +662,7 @@ export default function AprsWorkspace({ onOpenSettings }) {
           )}
           {withPosition.map((s) => (
             <Marker key={s.callsign} position={[s.lastPosition.lat, s.lastPosition.lon]} icon={stationIcon(s.symbol, s.everHeardDirect)} opacity={isStale(s.lastSeen) ? 0.4 : 1} eventHandlers={{ click: () => setSelectedCallsign(s.callsign) }}>
+              <LeafletTooltip direction="top" offset={[0, -14]}>{s.callsign}</LeafletTooltip>
               <Popup>
                 <strong>{s.callsign}</strong><br />
                 {s.comment && <>{s.comment}<br /></>}
@@ -681,6 +682,7 @@ export default function AprsWorkspace({ onOpenSettings }) {
           ))}
           {objectList.map((o) => (
             <Marker key={`obj-${o.name}`} position={[o.lat, o.lon]} icon={objectIcon(o.symbol)}>
+              <LeafletTooltip direction="top" offset={[0, -16]}>{o.name}</LeafletTooltip>
               <Popup>
                 <strong>{o.name}</strong> (object)<br />
                 {o.comment && <>{o.comment}<br /></>}
