@@ -136,6 +136,7 @@ function SplitHandle({ onMouseDown }) {
       onMouseDown={onMouseDown}
       sx={{
         height: 6, flexShrink: 0, cursor: 'row-resize', alignSelf: 'stretch',
+        borderTop: 1, borderBottom: 1, borderColor: 'divider',
         '&:hover': { bgcolor: 'action.hover' }
       }}
     />
