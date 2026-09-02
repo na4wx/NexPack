@@ -1,6 +1,6 @@
 {
   "name": "nexpack",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "private": true,
   "description": "NexPack — standalone multi-TNC/multi-radio packet terminal, Winlink+BBS, Chat, and APRS companion app for NexDigi",
   "author": "Jordan G Webb, NA4WX",
@@ -64,7 +64,8 @@
         }
       ],
       "extraResources": [
-        { "from": "pat/win32", "to": "pat/win32" }
+        { "from": "pat/win32", "to": "pat/win32" },
+        { "from": "direwolf/win32", "to": "direwolf/win32" }
       ]
     },
     "msi": {
@@ -78,7 +79,8 @@
       ],
       "category": "public.app-category.utilities",
       "extraResources": [
-        { "from": "pat/darwin", "to": "pat/darwin" }
+        { "from": "pat/darwin", "to": "pat/darwin" },
+        { "from": "direwolf/darwin", "to": "direwolf/darwin" }
       ]
     },
     "linux": {
@@ -89,7 +91,8 @@
       "category": "HamRadio",
       "maintainer": "Jordan G Webb <jwebb@shekinatech.com>",
       "extraResources": [
-        { "from": "pat/linux", "to": "pat/linux" }
+        { "from": "pat/linux", "to": "pat/linux" },
+        { "from": "direwolf/linux", "to": "direwolf/linux" }
       ]
     }
   }

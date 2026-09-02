@@ -26,8 +26,8 @@ export default function AddTncDialog({ open, onClose, onCreated }) {
   const [host, setHost] = useState('127.0.0.1');
   const [port, setPort] = useState(8001);
   const [serialPorts, setSerialPorts] = useState([]);
-  const [audioInputDevice, setAudioInputDevice] = useState('-');
-  const [audioOutputDevice, setAudioOutputDevice] = useState('-');
+  const [audioInputDevice, setAudioInputDevice] = useState('');
+  const [audioOutputDevice, setAudioOutputDevice] = useState('');
   const [pttMethod, setPttMethod] = useState('vox');
   const [pttDevice, setPttDevice] = useState('');
 
@@ -41,7 +41,7 @@ export default function AddTncDialog({ open, onClose, onCreated }) {
     if (!open) return;
     setName(''); setPath(''); setBaud(9600); setHost('127.0.0.1');
     setPort(type === 'agwpe' ? 8000 : 8001);
-    setAudioInputDevice('-'); setAudioOutputDevice('-'); setPttMethod('vox'); setPttDevice('');
+    setAudioInputDevice(''); setAudioOutputDevice(''); setPttMethod('vox'); setPttDevice('');
   }, [open, type]);
 
   const canSubmit = name.trim() && (
@@ -83,16 +83,18 @@ export default function AddTncDialog({ open, onClose, onCreated }) {
           ) : type === 'soundmodem' ? (
             <>
               <TextField
-                label="Audio input device"
+                label="Audio input device (optional)"
                 value={audioInputDevice}
                 onChange={(e) => setAudioInputDevice(e.target.value)}
-                helperText='"-" uses your system default mic/input. Otherwise enter the exact device name Direwolf expects for your OS.'
+                placeholder="System default"
+                helperText="Leave blank to use your system's default microphone/input. Otherwise enter the exact device name Direwolf expects for your OS."
               />
               <TextField
-                label="Audio output device"
+                label="Audio output device (optional)"
                 value={audioOutputDevice}
                 onChange={(e) => setAudioOutputDevice(e.target.value)}
-                helperText='"-" uses your system default speaker/output.'
+                placeholder="System default"
+                helperText="Leave blank to use your system's default speaker/output."
               />
               <TextField select label="PTT method" value={pttMethod} onChange={(e) => setPttMethod(e.target.value)}>
                 {Object.entries(PTT_METHOD_LABELS).map(([v, label]) => (
@@ -116,10 +118,11 @@ export default function AddTncDialog({ open, onClose, onCreated }) {
                 />
               )}
               <Alert severity="info">
-                This uses Direwolf (github.com/wb2osz/direwolf) as the modem — it must be installed
-                and on your PATH (macOS: <code>brew install direwolf</code>, Debian/Ubuntu:{' '}
-                <code>sudo apt install direwolf</code>, Windows: download from Direwolf's GitHub
-                releases). Add a radio below with the callsign-SSID to transmit as.
+                This uses Direwolf (github.com/wb2osz/direwolf) as the modem — a build of it ships
+                with NexPack, so nothing extra to install on macOS/Linux/Windows. If it's ever missing
+                for your platform, install it yourself and make sure it's on your PATH (macOS:{' '}
+                <code>brew install direwolf</code>, Debian/Ubuntu: <code>sudo apt install direwolf</code>).
+                Add a radio below with the callsign-SSID to transmit as.
               </Alert>
             </>
           ) : (

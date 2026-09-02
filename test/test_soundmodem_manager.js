@@ -52,10 +52,17 @@ process.on('SIGTERM', () => process.exit(0));
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexpack-soundmodem-test-'));
 
-  await test('config generation: default device, VOX PTT emits no PTT line', () => {
+  await test('config generation: no device specified omits ADEVICE entirely (lets Direwolf apply its own per-OS default)', () => {
+    // Verified against the real bundled binary: "-" is NOT a "use system
+    // default" sentinel to Direwolf — it means "pipe raw audio via
+    // stdin/stdout", a completely different (and useless here) mode. And
+    // the real "use the default device" value differs per platform (empty
+    // string on macOS/Windows, the literal word "default" for ALSA on
+    // Linux) — so the only value correct on every platform is to not emit
+    // an ADEVICE line at all when the user hasn't named a specific device.
     const mgr = new SoundModemManager({ userDataDir: dir });
     const conf = mgr._buildConfig({ callsign: 'na4wx-9', pttMethod: 'vox', port: 12345 });
-    assert.ok(/^ADEVICE - -$/m.test(conf), `expected default ADEVICE, got:\n${conf}`);
+    assert.ok(!/^ADEVICE/m.test(conf), `expected no ADEVICE line when no device was specified, got:\n${conf}`);
     assert.ok(/^MYCALL NA4WX-9$/m.test(conf), 'callsign should be uppercased');
     assert.ok(/^KISSPORT 12345$/m.test(conf));
     assert.ok(!/^PTT /m.test(conf), 'VOX should not emit a PTT directive (Direwolf has none)');
@@ -64,7 +71,9 @@ async function main() {
   await test('config generation: named audio devices and CM108 PTT', () => {
     const mgr = new SoundModemManager({ userDataDir: dir });
     const conf = mgr._buildConfig({ audioInputDevice: 'USB Audio CODEC', audioOutputDevice: 'USB Audio CODEC', pttMethod: 'cm108', pttDevice: '/dev/hidraw3', callsign: 'n0call', port: 999 });
-    assert.ok(/^ADEVICE USB Audio CODEC USB Audio CODEC$/m.test(conf));
+    // Quoted: device names routinely contain spaces, and Direwolf's config
+    // tokenizer splits unquoted ADEVICE tokens on whitespace like a shell.
+    assert.ok(/^ADEVICE "USB Audio CODEC" "USB Audio CODEC"$/m.test(conf), `got:\n${conf}`);
     assert.ok(/^PTT CM108 \/dev\/hidraw3$/m.test(conf));
   });
 
@@ -89,45 +98,107 @@ async function main() {
   await test('startFor()/stopFor() against a real (fake) direwolf: opens and tears down the KISS port', async () => {
     const bin = writeFakeDirewolf(dir);
     process.env.NEXPACK_DIREWOLF_PATH = bin;
-    const mgr = new SoundModemManager({ userDataDir: dir });
-    const { port } = await mgr.startFor('tnc-2', { pttMethod: 'none', callsign: 'N0CALL' });
-    assert.ok(port > 0);
-    assert.ok(mgr.isRunning('tnc-2'));
+    try {
+      const mgr = new SoundModemManager({ userDataDir: dir });
+      // Explicit devices here so this test doesn't also exercise
+      // _probeDefaultDevices — the fake stand-in doesn't speak Direwolf's
+      // real device-listing protocol, that path has its own dedicated test.
+      const { port } = await mgr.startFor('tnc-2', { audioInputDevice: 'fake-in', audioOutputDevice: 'fake-out', pttMethod: 'none', callsign: 'N0CALL' });
+      assert.ok(port > 0);
+      assert.ok(mgr.isRunning('tnc-2'));
 
-    // Prove the port is actually open and accepting connections.
-    await new Promise((resolve, reject) => {
-      const sock = net.createConnection({ host: '127.0.0.1', port }, () => { sock.end(); resolve(); });
-      sock.on('error', reject);
-    });
+      // Prove the port is actually open and accepting connections.
+      await new Promise((resolve, reject) => {
+        const sock = net.createConnection({ host: '127.0.0.1', port }, () => { sock.end(); resolve(); });
+        sock.on('error', reject);
+      });
 
-    await mgr.stopFor('tnc-2');
-    assert.ok(!mgr.isRunning('tnc-2'));
-    delete process.env.NEXPACK_DIREWOLF_PATH;
+      await mgr.stopFor('tnc-2');
+      assert.ok(!mgr.isRunning('tnc-2'));
+    } finally {
+      delete process.env.NEXPACK_DIREWOLF_PATH;
+    }
   });
 
   await test('TncManager end-to-end: a "soundmodem" TNC connects through the fake direwolf and reaches status=connected', async () => {
     const bin = writeFakeDirewolf(dir);
     process.env.NEXPACK_DIREWOLF_PATH = bin;
-    const smMgr = new SoundModemManager({ userDataDir: dir });
-    const tncMgr = new TncManager({ userDataDir: dir, soundModemManager: smMgr });
-    const tnc = tncMgr.createTnc({ name: 'Sound Card TNC', type: 'soundmodem', connection: { pttMethod: 'none' } });
-    tncMgr.addRadio(tnc.id, { callsign: 'NA4WX-9', name: 'Node', portNumber: 0 });
+    try {
+      const smMgr = new SoundModemManager({ userDataDir: dir });
+      const tncMgr = new TncManager({ userDataDir: dir, soundModemManager: smMgr });
+      const tnc = tncMgr.createTnc({ name: 'Sound Card TNC', type: 'soundmodem', connection: { audioInputDevice: 'fake-in', audioOutputDevice: 'fake-out', pttMethod: 'none' } });
+      tncMgr.addRadio(tnc.id, { callsign: 'NA4WX-9', name: 'Node', portNumber: 0 });
 
-    const connected = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('timed out waiting for connected status')), 5000);
-      tncMgr.on('tnc-status', ({ tncId, status, error }) => {
-        if (tncId !== tnc.id) return;
-        if (status === 'connected') { clearTimeout(timer); resolve(); }
-        if (status === 'error') { clearTimeout(timer); reject(new Error(error || 'unknown error')); }
+      const connected = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('timed out waiting for connected status')), 5000);
+        tncMgr.on('tnc-status', ({ tncId, status, error }) => {
+          if (tncId !== tnc.id) return;
+          if (status === 'connected') { clearTimeout(timer); resolve(); }
+          if (status === 'error') { clearTimeout(timer); reject(new Error(error || 'unknown error')); }
+        });
       });
-    });
-    await tncMgr.connectTnc(tnc.id);
-    await connected;
+      await tncMgr.connectTnc(tnc.id);
+      await connected;
 
-    await tncMgr.disconnectTnc(tnc.id);
-    assert.ok(!smMgr.isRunning(tnc.id), 'disconnecting a soundmodem TNC should stop its direwolf process');
-    delete process.env.NEXPACK_DIREWOLF_PATH;
+      await tncMgr.disconnectTnc(tnc.id);
+      assert.ok(!smMgr.isRunning(tnc.id), 'disconnecting a soundmodem TNC should stop its direwolf process');
+    } finally {
+      delete process.env.NEXPACK_DIREWOLF_PATH;
+    }
   });
+
+  await test('_probeDefaultDevices() against the real bundled direwolf on this platform, if any: finds real default device names', async () => {
+    const realBin = path.join(
+      __dirname, '..', 'direwolf',
+      process.platform === 'win32' ? 'win32' : path.join(process.platform, process.arch),
+      process.platform === 'win32' ? 'direwolf.exe' : 'direwolf'
+    );
+    if (!fs.existsSync(realBin) || process.platform === 'linux' || process.platform === 'win32') {
+      console.log('  (skipped — only meaningful against a real PortAudio-backed build on this platform)');
+      return;
+    }
+    const mgr = new SoundModemManager({ userDataDir: dir });
+    const result = await mgr._probeDefaultDevices(realBin);
+    assert.ok(result, 'expected to detect real default input/output device names');
+    assert.ok(result.input && result.input.length > 0);
+    assert.ok(result.output && result.output.length > 0);
+    // Cached: a second call should not re-spawn direwolf.
+    const result2 = await mgr._probeDefaultDevices(realBin);
+    assert.strictEqual(result2, result, 'expected the cached result to be reused');
+  });
+
+  await test('_reservePort() always returns a port Direwolf actually accepts (<= 49151)', async () => {
+    // Regression test for a real bug found running the actual bundled
+    // binary: listen(0) (ask the OS for any free ephemeral port) hands back
+    // a port in the OS's ephemeral range, which on macOS starts at 49152 —
+    // above Direwolf's KISSPORT limit, so it refused to start every single
+    // time. _reservePort() has to pick its own candidate in range instead.
+    const mgr = new SoundModemManager({ userDataDir: dir });
+    for (let i = 0; i < 10; i++) {
+      const port = await mgr._reservePort();
+      assert.ok(port >= 1024 && port <= 49151, `port ${port} is outside Direwolf's accepted KISSPORT range`);
+    }
+  });
+
+  const bundledBinary = path.join(
+    __dirname, '..', 'direwolf',
+    process.platform === 'win32' ? 'win32' : path.join(process.platform, process.arch),
+    process.platform === 'win32' ? 'direwolf.exe' : 'direwolf'
+  );
+  if (fs.existsSync(bundledBinary)) {
+    await test(`real bundled direwolf (${process.platform}/${process.arch}) actually starts and opens its KISS port`, async () => {
+      const mgr = new SoundModemManager({ userDataDir: dir, resourcesPath: path.join(__dirname, '..') });
+      assert.strictEqual(mgr._resolveBinaryPath(), bundledBinary);
+      const { port } = await mgr.startFor('real-tnc', { pttMethod: 'none', callsign: 'N0CALL' });
+      await new Promise((resolve, reject) => {
+        const sock = net.createConnection({ host: '127.0.0.1', port }, () => { sock.end(); resolve(); });
+        sock.on('error', reject);
+      });
+      await mgr.stopFor('real-tnc');
+    });
+  } else {
+    console.log(`(skipping real-bundled-binary test — no direwolf built for ${process.platform}/${process.arch} yet)`);
+  }
 
   console.log(`\nTests passed: ${pass}`);
   console.log(`Tests failed: ${fail}`);
