@@ -83,6 +83,65 @@ function ResizeHandle({ onMouseDown }) {
   );
 }
 
+// Same idea as useResizableWidth/ResizeHandle but for the vertical split
+// between two panels stacked in one column (Messages above Packet Monitor)
+// — a ratio (0..1, how much of the container's height the top panel gets)
+// instead of a pixel width, since the container itself can resize.
+function useResizableSplit(storageKey, defaultRatio = 0.5, { min = 0.15, max = 0.85 } = {}) {
+  const [ratio, setRatio] = useState(() => {
+    try {
+      const saved = Number(window.localStorage.getItem(storageKey));
+      return saved >= min && saved <= max ? saved : defaultRatio;
+    } catch (e) { return defaultRatio; }
+  });
+  const drag = useRef(null);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!drag.current) return;
+      const deltaRatio = (e.clientY - drag.current.startY) / drag.current.containerHeight;
+      const next = Math.min(max, Math.max(min, drag.current.startRatio + deltaRatio));
+      setRatio(next);
+    };
+    const onUp = () => {
+      if (!drag.current) return;
+      drag.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [min, max]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(storageKey, String(ratio)); } catch (e) { /* ignore */ }
+  }, [storageKey, ratio]);
+
+  // containerRef: the stack's own Box, so the drag can convert pixel
+  // movement into a fraction of however tall the stack currently is.
+  const onMouseDown = (e, containerRef) => {
+    const rect = containerRef.current ? containerRef.current.getBoundingClientRect() : { height: 400 };
+    drag.current = { startY: e.clientY, startRatio: ratio, containerHeight: rect.height };
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  return [ratio, onMouseDown];
+}
+
+function SplitHandle({ onMouseDown }) {
+  return (
+    <Box
+      onMouseDown={onMouseDown}
+      sx={{
+        height: 6, flexShrink: 0, cursor: 'row-resize', alignSelf: 'stretch',
+        '&:hover': { bgcolor: 'action.hover' }
+      }}
+    />
+  );
+}
+
 function stationIcon(symbol) {
   return L.divIcon({ html: getStationIconHtml(symbol), className: '', iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -14] });
 }
@@ -222,16 +281,10 @@ function MessagesContent({ initialTarget }) {
   );
 }
 
-function MessagesPanel({ open, docked, onClose, onToggleDock, initialTarget, width }) {
+// Modal-only now — a docked Messages panel is rendered by DockedSidebar
+// below instead, stacked with Packet Monitor rather than sitting beside it.
+function MessagesModal({ open, onClose, onToggleDock, initialTarget }) {
   if (!open) return null;
-  if (docked) {
-    return (
-      <Box sx={{ width, flexShrink: 0, borderLeft: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column' }}>
-        <DockableHeader title="Messages" docked onToggleDock={onToggleDock} onClose={onClose} />
-        <MessagesContent initialTarget={initialTarget} />
-      </Box>
-    );
-  }
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="sm">
       <DockableHeader title="APRS Messages" docked={false} onToggleDock={onToggleDock} onClose={onClose} />
@@ -242,23 +295,9 @@ function MessagesPanel({ open, docked, onClose, onToggleDock, initialTarget, wid
   );
 }
 
-function PacketMonitorPanel({ open, docked, onClose, onToggleDock, events, width }) {
+// Modal-only — see MessagesModal above.
+function PacketMonitorModal({ open, onClose, onToggleDock, events }) {
   if (!open) return null;
-  // MonitorPane fills its immediate parent via height:100%, which only
-  // resolves against a parent that's itself a sized flex item — the same
-  // { flexGrow: 1, minHeight: 0 } wrapper TerminalWorkspace already uses
-  // around it, needed here too or it collapses to zero height inside these
-  // flex-column containers.
-  if (docked) {
-    return (
-      <Box sx={{ width, flexShrink: 0, borderLeft: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column' }}>
-        <DockableHeader title="Packet Monitor" docked onToggleDock={onToggleDock} onClose={onClose} />
-        <Box sx={{ flexGrow: 1, minHeight: 0 }}>
-          <MonitorPane events={events} />
-        </Box>
-      </Box>
-    );
-  }
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="md">
       <DockableHeader title="Packet Monitor" docked={false} onToggleDock={onToggleDock} onClose={onClose} />
@@ -268,6 +307,45 @@ function PacketMonitorPanel({ open, docked, onClose, onToggleDock, events, width
         </Box>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// Messages and Packet Monitor, when both docked, stack one above the other
+// in a single column (rather than sitting side by side, which got wide
+// fast) — this renders whichever of the two are open+docked, with a
+// drag-to-resize divider between them when both are present. Station
+// detail is intentionally NOT part of this stack — it's rendered by the
+// caller to this component's left, between the map and this sidebar.
+function DockedSidebar({
+  width, messagesOpen, monitorOpen, onCloseMessages, onCloseMonitor,
+  onUndockMessages, onUndockMonitor, initialTarget, monitorEvents
+}) {
+  const containerRef = useRef(null);
+  const [split, onSplitResizeStart] = useResizableSplit('aprs.dockSplit', 0.5);
+  if (!messagesOpen && !monitorOpen) return null;
+  const both = messagesOpen && monitorOpen;
+
+  return (
+    <Box ref={containerRef} sx={{ width, flexShrink: 0, borderLeft: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {messagesOpen && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', flexBasis: both ? `${split * 100}%` : 'auto', flexGrow: both ? 0 : 1 }}>
+          <DockableHeader title="Messages" docked onToggleDock={onUndockMessages} onClose={onCloseMessages} />
+          <MessagesContent initialTarget={initialTarget} />
+        </Box>
+      )}
+      {both && <SplitHandle onMouseDown={(e) => onSplitResizeStart(e, containerRef)} />}
+      {monitorOpen && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', flexBasis: both ? `${(1 - split) * 100}%` : 'auto', flexGrow: both ? 0 : 1 }}>
+          <DockableHeader title="Packet Monitor" docked onToggleDock={onUndockMonitor} onClose={onCloseMonitor} />
+          {/* MonitorPane fills its immediate parent via height:100%, which only
+              resolves against a parent that's itself a sized flex item — same
+              { flexGrow: 1, minHeight: 0 } wrapper TerminalWorkspace uses. */}
+          <Box sx={{ flexGrow: 1, minHeight: 0 }}>
+            <MonitorPane events={monitorEvents} />
+          </Box>
+        </Box>
+      )}
+    </Box>
   );
 }
 
@@ -489,8 +567,9 @@ export default function AprsWorkspace({ onOpenSettings }) {
 
   const [sidebarWidth, onSidebarResizeStart] = useResizableWidth('aprs.sidebarWidth', 280, { min: 220, max: 480, edge: 'right' });
   const [detailWidth, onDetailResizeStart] = useResizableWidth('aprs.detailWidth', 320, { min: 260, max: 560, edge: 'left' });
-  const [messagesWidth, onMessagesResizeStart] = useResizableWidth('aprs.messagesWidth', DOCK_WIDTH, { min: 280, max: 640, edge: 'left' });
-  const [monitorWidth, onMonitorResizeStart] = useResizableWidth('aprs.monitorWidth', 480, { min: 320, max: 800, edge: 'left' });
+  // Messages and Packet Monitor now stack in one column (DockedSidebar)
+  // rather than sitting side by side, so they share a single width.
+  const [dockWidth, onDockResizeStart] = useResizableWidth('aprs.dockWidth', DOCK_WIDTH, { min: 280, max: 720, edge: 'left' });
 
   return (
     <Box sx={{ display: 'flex', height: '100%' }}>
@@ -565,6 +644,9 @@ export default function AprsWorkspace({ onOpenSettings }) {
         </MapContainer>
       </Box>
 
+      {/* Station detail always sits immediately left of the docked
+          Messages/Monitor sidebar (between it and the map), whichever of
+          the two are open. */}
       {selected && (
         <>
           <ResizeHandle onMouseDown={onDetailResizeStart} />
@@ -572,24 +654,30 @@ export default function AprsWorkspace({ onOpenSettings }) {
         </>
       )}
 
-      {messagesOpen && messagesDocked && <ResizeHandle onMouseDown={onMessagesResizeStart} />}
-      <MessagesPanel
-        open={messagesOpen}
-        docked={messagesDocked}
-        onClose={() => setMessagesOpen(false)}
-        onToggleDock={() => setMessagesDocked((d) => !d)}
+      {((messagesOpen && messagesDocked) || (monitorOpen && monitorDocked)) && <ResizeHandle onMouseDown={onDockResizeStart} />}
+      <DockedSidebar
+        width={dockWidth}
+        messagesOpen={messagesOpen && messagesDocked}
+        monitorOpen={monitorOpen && monitorDocked}
+        onCloseMessages={() => setMessagesOpen(false)}
+        onCloseMonitor={() => setMonitorOpen(false)}
+        onUndockMessages={() => setMessagesDocked(false)}
+        onUndockMonitor={() => setMonitorDocked(false)}
         initialTarget={messageTarget}
-        width={messagesWidth}
+        monitorEvents={monitorEvents}
       />
 
-      {monitorOpen && monitorDocked && <ResizeHandle onMouseDown={onMonitorResizeStart} />}
-      <PacketMonitorPanel
-        open={monitorOpen}
-        docked={monitorDocked}
+      <MessagesModal
+        open={messagesOpen && !messagesDocked}
+        onClose={() => setMessagesOpen(false)}
+        onToggleDock={() => setMessagesDocked(true)}
+        initialTarget={messageTarget}
+      />
+      <PacketMonitorModal
+        open={monitorOpen && !monitorDocked}
         onClose={() => setMonitorOpen(false)}
-        onToggleDock={() => setMonitorDocked((d) => !d)}
+        onToggleDock={() => setMonitorDocked(true)}
         events={monitorEvents}
-        width={monitorWidth}
       />
 
       <ObjectsDialog open={objectsOpen} onClose={() => setObjectsOpen(false)} />
