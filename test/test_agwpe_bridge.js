@@ -158,6 +158,89 @@ async function main() {
     assert.ok(/DISCONNECTED/i.test(reply.payload.toString('ascii')));
   });
 
+  await test('_ensureRadioConnected() actually waits for the real async "connected" status, not just for connectTnc()\'s promise', async () => {
+    // Reported live: nothing transmitted at all on a real connect attempt,
+    // and pat just hung until its own 120s timeout. Root cause —
+    // TncManager.connectTnc() resolves as soon as it STARTS connecting a
+    // serial/KISS-TCP/AGWPE radio, not once the adapter is actually open;
+    // the old code called startSession() immediately after, which silently
+    // dropped the very first SABM into a socket that wasn't ready yet.
+    // This pins down the fix directly: the TNC here is deliberately NOT
+    // pre-connected (unlike the setup above), so _ensureRadioConnected()
+    // has to do the real work — and Node's net.Socket connect can only
+    // ever resolve on a later tick, never synchronously, even on
+    // localhost, so checking status immediately after calling reliably
+    // proves it hasn't resolved prematurely.
+    const mgrC = new TncManager({});
+    const tncC = mgrC.createTnc({ name: 'C', type: 'kiss-tcp', connection: { host: '127.0.0.1', port: bridgePort } });
+    const radioC = mgrC.addRadio(tncC.id, { callsign: 'NA4WX-11', name: 'Winlink', portNumber: 0 });
+    const bridgeC = new AgwpeBridgeServer({ tncManager: mgrC, getRadio: () => ({ tncId: tncC.id, radioId: radioC.id }) });
+
+    const donePromise = bridgeC._ensureRadioConnected(tncC.id);
+    const statusRightAfterCalling = mgrC.listTncs().find((t) => t.id === tncC.id).status;
+    assert.notStrictEqual(statusRightAfterCalling, 'connected', 'should not already report connected synchronously — that would mean nothing was actually awaited');
+
+    await donePromise;
+    const statusAfterAwait = mgrC.listTncs().find((t) => t.id === tncC.id).status;
+    assert.strictEqual(statusAfterAwait, 'connected');
+
+    mgrC.shutdown();
+  });
+
+  await test('a connect issued before the radio is pre-connected still completes a real SABM/UA handshake (no dropped first frame)', async () => {
+    const mgrD = new TncManager({});
+    const tncD = mgrD.createTnc({ name: 'D', type: 'kiss-tcp', connection: { host: '127.0.0.1', port: bridgePort } });
+    const radioD = mgrD.addRadio(tncD.id, { callsign: 'NA4WX-12', name: 'Winlink', portNumber: 0 });
+    const bridgeD = new AgwpeBridgeServer({ tncManager: mgrD, getRadio: () => ({ tncId: tncD.id, radioId: radioD.id }) });
+    const bridgeDPort = await bridgeD.start();
+
+    // mgrB (the "remote gateway" from the tests above) is still up and
+    // listening on the shared KISS loopback — deliberately reused as the
+    // real remote peer for this handshake too.
+    const clientD = new TestAgwClient(bridgeDPort);
+    await clientD.connect();
+    clientD.send({ kind: 'X', callFrom: 'NA4WX-12' });
+    await clientD.waitFor((f) => f.kind === 'X');
+    // tncD has never had connectTnc() called on it before this point.
+    clientD.send({ kind: 'C', callFrom: 'NA4WX-12', callTo: 'WB4GBI-10' });
+    const reply = await clientD.waitFor((f) => f.kind === 'C', 5000);
+    assert.ok(/CONNECTED/i.test(reply.payload.toString('ascii')), `expected a CONNECTED message, got: ${reply.payload.toString('ascii')}`);
+
+    clientD.close();
+    bridgeD.stop();
+    mgrD.shutdown();
+  });
+
+  await test('a configured radio that can never actually connect (e.g. unreachable host) fails fast with the real error, not a 120s hang', async () => {
+    // The scenario reported live: a radio WAS configured, so the "no radio
+    // configured" fast path (below) never fired, yet the connect still
+    // hung for the full 120s with nothing transmitted. Whatever the exact
+    // trigger, _ensureRadioConnected() now bounds every such failure to a
+    // real 'tnc-status':'error' event (or a 10s timeout) instead of only
+    // ever surfacing via pat's own much longer external timeout.
+    const mgrE = new TncManager({});
+    const deadPort = 1; // nothing listening here — a real, fast ECONNREFUSED
+    const tncE = mgrE.createTnc({ name: 'E', type: 'kiss-tcp', connection: { host: '127.0.0.1', port: deadPort } });
+    const radioE = mgrE.addRadio(tncE.id, { callsign: 'NA4WX-13', name: 'Winlink', portNumber: 0 });
+    const bridgeE = new AgwpeBridgeServer({ tncManager: mgrE, getRadio: () => ({ tncId: tncE.id, radioId: radioE.id }) });
+    const bridgeEPort = await bridgeE.start();
+
+    const clientE = new TestAgwClient(bridgeEPort);
+    await clientE.connect();
+    clientE.send({ kind: 'X', callFrom: 'NA4WX-13' });
+    await clientE.waitFor((f) => f.kind === 'X');
+    const start = Date.now();
+    clientE.send({ kind: 'C', callFrom: 'NA4WX-13', callTo: 'WB4GBI-10' });
+    const reply = await clientE.waitFor((f) => f.kind === 'd', 15000);
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 15000, `should fail well within pat's own 120s timeout (took ${elapsed}ms)`);
+    assert.ok(!/no radio configured/i.test(reply.payload.toString('ascii')), 'this radio IS configured — the failure reason should reflect the real connection error');
+
+    clientE.close();
+    bridgeE.stop();
+    mgrE.shutdown();
+  });
+
   await test('a connect attempt with no radio configured fails fast with a clear reason instead of hanging', async () => {
     const bridge2 = new AgwpeBridgeServer({ tncManager: mgrA, getRadio: () => null });
     const port2 = await bridge2.start();

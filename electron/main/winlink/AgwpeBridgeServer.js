@@ -210,9 +210,7 @@ class AgwpeBridgeServer extends EventEmitter {
       return;
     }
     try {
-      // startSession() throws synchronously if the TNC isn't already
-      // connected — bring it up first (a no-op if it's already up).
-      await this.tncManager.connectTnc(radio.tncId);
+      await this._ensureRadioConnected(radio.tncId);
       const snap = this.tncManager.startSession(radio.tncId, radio.radioId, callTo);
       const entry = { socket, callFrom: callFrom.toUpperCase(), callTo: callTo.toUpperCase(), port, sessionId: snap.id };
       this.sessions.set(snap.id, entry);
@@ -221,6 +219,37 @@ class AgwpeBridgeServer extends EventEmitter {
     } catch (e) {
       this._sendDisconnect({ socket, callFrom, callTo, port, sessionId: null }, `*** DISCONNECTED From Station ${callTo} (${e.message})\r`);
     }
+  }
+
+  // TncManager.connectTnc() resolves as soon as it STARTS connecting a
+  // serial/KISS-TCP/AGWPE radio — not once it's actually open (only a
+  // 'soundmodem' radio's promise really waits, since it has to wait on a
+  // Direwolf subprocess). Every other UI path in this app is fine with
+  // that because a human is in the loop between "connect the radio" and
+  // "start a session" — this bridge isn't, and calling startSession()
+  // immediately after connectTnc() raced ahead of the adapter actually
+  // opening, silently dropping the very first SABM into a socket/port
+  // that wasn't ready yet (confirmed live: nothing transmitted at all,
+  // and pat just sat there until its own 120s timeout — a real bug, not a
+  // "no RF answer" case). Waits for a real 'tnc-status' 'connected' (or
+  // 'error') event instead of trusting connectTnc()'s promise.
+  _ensureRadioConnected(tncId) {
+    const isConnected = () => {
+      const t = this.tncManager.listTncs().find((x) => x.id === tncId);
+      return !!t && t.status === 'connected';
+    };
+    if (isConnected()) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { cleanup(); reject(new Error('radio did not finish connecting in time')); }, 10000);
+      const onStatus = (evt) => {
+        if (evt.tncId !== tncId) return;
+        if (evt.status === 'connected') { cleanup(); resolve(); }
+        else if (evt.status === 'error') { cleanup(); reject(new Error(evt.error || 'radio failed to connect')); }
+      };
+      const cleanup = () => { clearTimeout(timer); this.tncManager.removeListener('tnc-status', onStatus); };
+      this.tncManager.on('tnc-status', onStatus);
+      this.tncManager.connectTnc(tncId).catch((e) => { cleanup(); reject(e); });
+    });
   }
 }
 
