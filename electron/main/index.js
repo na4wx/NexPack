@@ -65,7 +65,7 @@ app.whenReady().then(() => {
   soundModemManager = new SoundModemManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
   tncManager = new TncManager({ configPath: path.join(app.getPath('userData'), 'tncs.json'), userDataDir: app.getPath('userData'), soundModemManager });
   scriptManager = new ScriptManager({ userDataDir: app.getPath('userData'), tncManager });
-  patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
+  patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath, tncManager });
   nexDigiClient = new NexDigiClient({ userDataDir: app.getPath('userData') });
   rfBbsClient = new RfBbsClient({ userDataDir: app.getPath('userData'), tncManager });
   bbsFacade = new BbsFacade({ userDataDir: app.getPath('userData'), nexDigiClient, rfBbsClient });
@@ -172,6 +172,7 @@ app.whenReady().then(() => {
 
   // Winlink (via bundled pat subprocess)
   ipcMain.handle('winlink:getSettings', () => patManager.getSettings());
+  ipcMain.handle('winlink:getRfRadio', () => patManager.getRfRadio());
   ipcMain.handle('winlink:saveSettings', (_e, settings) => patManager.saveSettings(settings));
   ipcMain.handle('winlink:start', () => patManager.start());
   ipcMain.handle('winlink:stop', () => patManager.stop());

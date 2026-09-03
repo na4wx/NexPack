@@ -29,7 +29,7 @@ export default function SettingsPage({ tncs, initialTab }) {
       </Tabs>
       <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: 3 }}>
         {tab === 'terminal' && <TerminalSettingsPanel tncs={tncs} />}
-        {tab === 'winlink' && <WinlinkSettingsPanel />}
+        {tab === 'winlink' && <WinlinkSettingsPanel tncs={tncs} />}
         {tab === 'chat' && <ChatSettingsPanel tncs={tncs} />}
         {tab === 'aprs' && <AprsSettingsPanel tncs={tncs} />}
         {tab === 'about' && <AboutSettingsPanel />}

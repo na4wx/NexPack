@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('nexdigi', {
 
   // Winlink (bundled pat subprocess)
   winlinkGetSettings: () => ipcRenderer.invoke('winlink:getSettings'),
+  winlinkGetRfRadio: () => ipcRenderer.invoke('winlink:getRfRadio'),
   winlinkSaveSettings: (settings) => ipcRenderer.invoke('winlink:saveSettings', settings),
   winlinkStart: () => ipcRenderer.invoke('winlink:start'),
   winlinkStop: () => ipcRenderer.invoke('winlink:stop'),

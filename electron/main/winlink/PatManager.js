@@ -34,18 +34,54 @@ const CONNECT_TIMEOUT_MS = 120000;
 //   GET    /api/rmslist?...                  -> RMS gateway directory search
 //   WS     /ws                               -> live status/console feed (JSON messages)
 class PatManager extends EventEmitter {
-  constructor({ userDataDir, resourcesPath }) {
+  constructor({ userDataDir, resourcesPath, tncManager }) {
     super();
     this.dataDir = path.join(userDataDir, 'winlink');
     this.configPath = path.join(this.dataDir, 'config.json');
+    this.rfRadioPath = path.join(this.dataDir, 'rf-radio.json');
     this.mboxDir = path.join(this.dataDir, 'mbox');
     this.pidFilePath = path.join(this.dataDir, 'pat.pid');
     this.resourcesPath = resourcesPath;
+    this.tncManager = tncManager;
     this.port = null;
     this.proc = null;
     this.ws = null;
     this._connecting = false;
     fs.mkdirSync(this.mboxDir, { recursive: true });
+  }
+
+  // Which NexPack radio (from TNCs & Radios) to reach an RMS Gateway
+  // through — kept separate from pat's own config.json (below) since it
+  // names a NexPack radio, not a pat setting, and its real AGWPE address is
+  // resolved fresh on every start (see _resolveAgwpeConfig) rather than
+  // being written here.
+  getRfRadio() {
+    if (!fs.existsSync(this.rfRadioPath)) return null;
+    try { return JSON.parse(fs.readFileSync(this.rfRadioPath, 'utf8')); } catch (e) { return null; }
+  }
+
+  _saveRfRadio(rfRadio) {
+    fs.writeFileSync(this.rfRadioPath, JSON.stringify(rfRadio || null, null, 2));
+  }
+
+  // Resolves the configured radio into a real AGWPE {addr, radio_port} for
+  // pat's config — null if no radio is configured, the radio no longer
+  // exists, or (for the built-in Sound Modem) it isn't actually reachable
+  // right now. Called fresh on every start(), not just on save: a
+  // 'soundmodem' radio's AGWPE port is only assigned when Direwolf actually
+  // starts and can differ between runs, so a value baked in once at save
+  // time would go stale.
+  async _resolveAgwpeConfig() {
+    const rfRadio = this.getRfRadio();
+    if (!rfRadio || !rfRadio.tncId || !rfRadio.radioId || !this.tncManager) return null;
+    try {
+      const ep = await this.tncManager.getAgwpeEndpoint(rfRadio.tncId, rfRadio.radioId);
+      if (!ep) return null;
+      return { addr: `${ep.host}:${ep.port}`, radio_port: ep.radioPort || 0 };
+    } catch (e) {
+      this.emit('log', `Could not reach the configured RF radio for Winlink: ${e.message}\n`);
+      return null;
+    }
   }
 
   // If a previous run of NexPack died without cleanly stopping pat (crash,
@@ -125,16 +161,27 @@ class PatManager extends EventEmitter {
   // is restarted, which is exactly what happened during manual testing: a
   // password change was saved correctly to disk the whole time, but the
   // already-running pat process never picked it up.
-  async saveSettings({ callsign, winlinkPassword, connectAliases = {}, ax25, agwpe }) {
+  // Deliberately does no async work before this write (and no earlier
+  // await in the whole function): callers throughout this codebase call
+  // saveSettings() without awaiting it and rely on the file already being
+  // correct by the next synchronous line. The actual AGWPE address for a
+  // chosen rfRadio is NOT resolved here — only _doStart() resolves it (see
+  // _resolveAgwpeConfig), since a 'soundmodem' radio's real AGWPE port
+  // isn't known until Direwolf is actually running, and re-resolving fresh
+  // on every start keeps it from going stale across restarts anyway. The
+  // restart path below already calls start(), so a live radio change still
+  // takes effect immediately without needing it resolved here too.
+  async saveSettings({ callsign, winlinkPassword, connectAliases = {}, rfRadio }) {
     const base = this.getSettings() || {};
+    if (rfRadio !== undefined) this._saveRfRadio(rfRadio);
     const merged = {
       ...base,
       mycall: (callsign || '').toUpperCase(),
       secure_login_password: winlinkPassword || '',
       http_addr: base.http_addr || '127.0.0.1:0',
       connect_aliases: { ...(base.connect_aliases || {}), ...connectAliases },
-      ax25: ax25 || base.ax25 || { engine: 'agwpe', rig: '', beacon: { every: 0, message: '', destination: 'IDENT' } },
-      agwpe: agwpe || base.agwpe || { addr: '127.0.0.1:8000', radio_port: 0 }
+      ax25: base.ax25 || { engine: 'agwpe', rig: '', beacon: { every: 0, message: '', destination: 'IDENT' } },
+      agwpe: base.agwpe || { addr: '127.0.0.1:8000', radio_port: 0 }
     };
     fs.writeFileSync(this.configPath, JSON.stringify(merged, null, 2));
     if (this.proc || this._startPromise) {
@@ -171,6 +218,11 @@ class PatManager extends EventEmitter {
     });
     const settings = this.getSettings();
     settings.http_addr = `127.0.0.1:${this.port}`;
+    // Re-resolved here, not just at saveSettings time — a 'soundmodem'
+    // radio's AGWPE port is assigned fresh by Direwolf each run and would
+    // otherwise go stale across restarts (see _resolveAgwpeConfig).
+    const agwpe = await this._resolveAgwpeConfig();
+    if (agwpe) settings.agwpe = agwpe;
     fs.writeFileSync(this.configPath, JSON.stringify(settings, null, 2));
 
     const bin = this._resolveBinaryPath();
