@@ -294,6 +294,11 @@ function MessagesContent({ initialTarget }) {
                   deleteIcon={m.status === 'sent' ? <Tooltip title="Cancel — stop retrying"><CloseIcon fontSize="small" /></Tooltip> : undefined}
                 />
               )}
+              {m.direction === 'in' && m.heardDirect !== null && m.heardDirect !== undefined && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.3 }}>
+                  {m.heardDirect ? 'Heard direct' : 'Heard via digipeater'}
+                </Typography>
+              )}
             </Box>
           ))}
           {thread.length === 0 && <Typography variant="body2" color="text.secondary">No messages with this station yet.</Typography>}

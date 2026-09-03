@@ -141,6 +141,40 @@ async function main() {
     assert.ok(!after.some((m) => m.callsign === 'W1ABC-1' && m.direction === 'in'), 'there should be no incoming message that appears to be from ourselves');
   });
 
+  await test('a message digipeated to us is flagged heardDirect:false, not misread as a direct message', async () => {
+    // Reported live: "APWW11* → W4ACR-4 → W4ETR-10* → WIDE2-1 / :KQ4QCJ-1 :Ok, I
+    // can do it." was shown as if it came direct, with no indication it went
+    // through 3 digipeaters.
+    aprs.saveMyStation({ mycall: 'KQ4QCJ-1', symbol: '/>', comment: '', homePosition: null, beacon: { enabled: false, intervalMinutes: 30, path: '', tncId: null, radioId: null } });
+    const messagePayload = buildMessagePacket({ addressee: 'KQ4QCJ-1', text: 'Ok, I can do it.', msgId: 'QO' });
+    const raw = net.createConnection({ host: '127.0.0.1', port: bridgePort });
+    await new Promise((resolve) => raw.on('connect', resolve));
+    sendDigipeatedFrame(raw, { dest: 'APZNXP', src: 'W4ACR-4', path: ['WIDE1-1', 'WIDE2-1'], payload: messagePayload });
+    await wait(300);
+    raw.end();
+
+    const entry = aprs.getMessages().find((m) => m.direction === 'in' && m.callsign === 'W4ACR-4' && m.msgId === 'QO');
+    assert.ok(entry, 'expected the message to be recorded');
+    assert.strictEqual(entry.heardDirect, false, 'a digipeated message must not be flagged as heard direct');
+  });
+
+  await test('a duplicate copy of the same message (same sender + msgId), e.g. re-repeated by another digipeater, is not inserted twice', async () => {
+    aprs.saveMyStation({ mycall: 'KQ4QCJ-1', symbol: '/>', comment: '', homePosition: null, beacon: { enabled: false, intervalMinutes: 30, path: '', tncId: null, radioId: null } });
+    const messagePayload = buildMessagePacket({ addressee: 'KQ4QCJ-1', text: 'duplicate test', msgId: 'DUP1' });
+    const before = aprs.getMessages().filter((m) => m.direction === 'in' && m.callsign === 'W4ACR-4' && m.msgId === 'DUP1').length;
+
+    for (let i = 0; i < 3; i++) {
+      const raw = net.createConnection({ host: '127.0.0.1', port: bridgePort });
+      await new Promise((resolve) => raw.on('connect', resolve));
+      sendDigipeatedFrame(raw, { dest: 'APZNXP', src: 'W4ACR-4', path: ['WIDE1-1', 'WIDE2-1'], payload: messagePayload });
+      await wait(300);
+      raw.end();
+    }
+
+    const after = aprs.getMessages().filter((m) => m.direction === 'in' && m.callsign === 'W4ACR-4' && m.msgId === 'DUP1').length;
+    assert.strictEqual(after, before + 1, 'three deliveries of the identical (sender, msgId) message should produce exactly one stored entry, not three');
+  });
+
   console.log(`\nTests passed: ${pass}`);
   console.log(`Tests failed: ${fail}`);
 

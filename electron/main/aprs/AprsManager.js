@@ -173,7 +173,7 @@ class AprsManager extends EventEmitter {
 
     if (dti === ':') {
       const messageDecoded = parseMessage(text);
-      if (messageDecoded) { this._handleMessage(callsign, messageDecoded, source, text); return; }
+      if (messageDecoded) { this._handleMessage(callsign, messageDecoded, source, text, heardDirect); return; }
     }
 
     if (dti === 'T' && text[1] === '#') {
@@ -362,7 +362,7 @@ class AprsManager extends EventEmitter {
     if (pending) { clearTimeout(pending.timer); this.pendingAcks.delete(msgId); }
   }
 
-  _handleMessage(fromCallsign, decoded, source, rawText) {
+  _handleMessage(fromCallsign, decoded, source, rawText, heardDirect) {
     const my = this.getMyStation();
     const myBase = (my.mycall || '').toUpperCase();
     if (decoded.isAck || decoded.isRej) {
@@ -374,7 +374,28 @@ class AprsManager extends EventEmitter {
       }
       return;
     }
-    const entry = { id: `${fromCallsign}-${decoded.msgId || Date.now()}`, direction: 'in', callsign: fromCallsign, text: decoded.text, msgId: decoded.msgId, status: 'received', read: false, timestamp: Date.now() };
+    // A message with a digipeater path routinely arrives more than once —
+    // once per digipeater that actually repeats it, and again on retries by
+    // the sender before our ack gets back to them. APRS msgId uniqueness is
+    // scoped to the sending station, so (sender, msgId) is the right key;
+    // without a msgId (rare, spec allows it) we can't dedup and just accept
+    // the duplicate. Re-send the ack too, since the sender may not have
+    // gotten our first one either — that's the same reason they retried.
+    if (decoded.msgId) {
+      const dup = this.messages.find((m) => m.direction === 'in' && m.callsign === fromCallsign && m.msgId === decoded.msgId);
+      if (dup) {
+        if (myBase && decoded.addressee.toUpperCase() === myBase) {
+          const ack = buildAckPacket({ addressee: fromCallsign, msgId: decoded.msgId });
+          this._transmit(ack);
+        }
+        return;
+      }
+    }
+    // heardDirect is only meaningful on the RF path (undefined over
+    // APRS-IS, where there's no digipeater path to inspect) — surfaced on
+    // the entry so the UI can show "via digipeater" instead of implying
+    // this station reached us directly.
+    const entry = { id: `${fromCallsign}-${decoded.msgId || Date.now()}`, direction: 'in', callsign: fromCallsign, text: decoded.text, msgId: decoded.msgId, status: 'received', read: false, timestamp: Date.now(), heardDirect: heardDirect === undefined ? null : heardDirect };
     this.messages.push(entry);
     this.emit('aprs-message', entry);
 
