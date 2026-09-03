@@ -2,9 +2,10 @@
   "name": "nexpack",
   "version": "0.3.2",
   "private": true,
-  "description": "NexPack — standalone multi-TNC/multi-radio packet terminal, Winlink+BBS, Chat, and APRS companion app for NexDigi",
+  "description": "NexPack — standalone multi-TNC/multi-radio packet terminal, Winlink, BBS, Chat, and APRS companion app for NexDigi",
   "author": "Jordan G Webb, NA4WX",
   "license": "MIT",
+  "homepage": "https://github.com/na4wx/NexPack",
   "main": "electron/main/index.js",
   "engines": {
     "node": ">=18"
