@@ -9,7 +9,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import { useTncs } from './hooks/useTncs';
 import TerminalWorkspace from './pages/TerminalWorkspace';
 import TncManagerPage from './pages/TncManagerPage';
-import MailWorkspace from './pages/MailWorkspace';
+import WinlinkMail from './pages/WinlinkMail';
 import ChatWorkspace from './pages/ChatWorkspace';
 import AprsWorkspace from './pages/AprsWorkspace';
 import SettingsPage from './pages/SettingsPage';
@@ -19,7 +19,7 @@ const RAIL_WIDTH = 76;
 const NAV_ITEMS = [
   { key: 'terminal', label: 'Terminal', icon: <TerminalIcon /> },
   { key: 'tncs', label: 'TNCs & Radios', icon: <RouterIcon /> },
-  { key: 'winlink', label: 'Winlink / BBS', icon: <MailIcon /> },
+  { key: 'winlink', label: 'Winlink', icon: <MailIcon /> },
   { key: 'chat', label: 'Chat', icon: <ChatIcon /> },
   { key: 'aprs', label: 'APRS', icon: <MapIcon /> }
 ];
@@ -98,7 +98,7 @@ export default function App() {
           <TerminalWorkspace tncs={tncs} onOpenSettings={openSettings} />
         </Box>
         <Box sx={{ display: page === 'winlink' ? 'flex' : 'none', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-          <MailWorkspace tncs={tncs} onOpenSettings={openSettings} />
+          <WinlinkMail active={page === 'winlink'} onOpenSettings={openSettings} />
         </Box>
         <Box sx={{ display: page === 'chat' ? 'flex' : 'none', flexDirection: 'column', height: '100%', minHeight: 0 }}>
           <ChatWorkspace onOpenSettings={openSettings} />

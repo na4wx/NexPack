@@ -71,7 +71,7 @@ export default function TerminalSettingsPanel({ tncs }) {
       <Typography variant="body2" color="text.secondary">
         When enabled, a remote station connecting to Terminal's radio (above) gets a welcome message and a
         menu — replying CHAT or BBS takes them straight into that part of NexPack; BYE disconnects. Connecting
-        directly to the BBS or Chat radio (set in their own tabs) skips this menu entirely.
+        directly to the BBS or Chat radio (set in the Chat tab) skips this menu entirely.
       </Typography>
       <FormControlLabel control={<Switch checked={nodeEnabled} onChange={(e) => setNodeEnabled(e.target.checked)} />} label="Serve a node menu to incoming connections" />
       <TextField

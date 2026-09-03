@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Stack, Tabs, Tab, Button, IconButton, Typography, MenuItem, Select, Chip, Alert } from '@mui/material';
+import { Box, Stack, Tabs, Tab, Button, IconButton, Typography, MenuItem, Select, Chip, Alert, TextField, Autocomplete, CircularProgress } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsIcon from '@mui/icons-material/Settings';
 import CallMadeIcon from '@mui/icons-material/CallMade';
@@ -8,6 +8,19 @@ import MessageList from '../components/MessageList';
 import MessageReadPane from '../components/MessageReadPane';
 import ComposeDialog from '../components/ComposeDialog';
 
+// Connect-alias keys are stored/matched verbatim — this only prettifies how
+// they're displayed in the dropdown.
+const ALIAS_LABEL = { telnet: 'Telnet (CMS)' };
+const aliasLabel = (key) => ALIAS_LABEL[key] || key;
+
+// RF is a synthetic option, not a saved alias: which RMS gateway is actually
+// in range changes trip to trip, so instead of a fixed callsign baked into
+// Settings, the node is typed here at connect time and turned straight into
+// an ax25:///CALLSIGN target (the AGWPE TNC to reach it through is still
+// configured once, in Winlink settings).
+const RF_OPTION = '__rf__';
+const CALLSIGN_RE = /^[A-Z0-9]{3,7}(-\d{1,2})?$/;
+
 const FOLDERS = [
   { key: 'in', label: 'Inbox' },
   { key: 'out', label: 'Outbox' },
@@ -15,7 +28,7 @@ const FOLDERS = [
   { key: 'archive', label: 'Archive' }
 ];
 
-export default function WinlinkMail({ onOpenSettings }) {
+export default function WinlinkMail({ active, onOpenSettings }) {
   const [configured, setConfigured] = useState(null); // null = unknown yet
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState(null);
@@ -25,9 +38,14 @@ export default function WinlinkMail({ onOpenSettings }) {
   const [composeOpen, setComposeOpen] = useState(false);
   const [aliases, setAliases] = useState({});
   const [connectAlias, setConnectAlias] = useState('');
+  const [rfNodeCall, setRfNodeCall] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [log, setLog] = useState([]);
   const logRef = useRef(null);
+  const [rmsOptions, setRmsOptions] = useState([]);
+  const [rmsLoading, setRmsLoading] = useState(false);
+  const [rmsError, setRmsError] = useState(null);
+  const rmsLoadedRef = useRef(false);
 
   const boot = async () => {
     const settings = await window.nexdigi.winlinkGetSettings();
@@ -50,6 +68,20 @@ export default function WinlinkMail({ onOpenSettings }) {
   };
 
   useEffect(() => { boot(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // WinlinkMail stays mounted (App.jsx keeps every workspace alive under
+  // display:none) so boot()'s one-time alias fetch never re-runs after a
+  // connect target is added/removed in Settings — e.g. filling in an RMS
+  // Gateway callsign there wouldn't show up in the "Telnet" dropdown here
+  // until the whole app restarted. Re-fetch aliases each time this page is
+  // actually navigated back to.
+  useEffect(() => {
+    if (!active || configured === false) return;
+    window.nexdigi.winlinkGetConnectAliases().then((a) => {
+      setAliases(a || {});
+      setConnectAlias((prev) => (prev && a && a[prev] ? prev : Object.keys(a || {})[0] || ''));
+    });
+  }, [active, configured]);
 
   useEffect(() => {
     const off = window.nexdigi.onWinlinkLog((line) => setLog((prev) => [...prev.slice(-200), line]));
@@ -83,11 +115,57 @@ export default function WinlinkMail({ onOpenSettings }) {
     if (folder === 'out') refreshFolder('out');
   };
 
+  // Winlink's own directory of active RMS Gateways (pat downloads and caches
+  // it from winlink.org) — fetched lazily the first time RF is picked, not
+  // on every page load, since it's a ~1000+ entry directory covering every
+  // packet gateway on the air, not just local ones. Restricted to packet
+  // mode: this app only ever connects over AX.25, not VARA/Pactor/Ardop,
+  // which the same directory also lists. Deduped to one entry per callsign
+  // (a gateway can list several channels/frequencies) — the frequency isn't
+  // used for anything here, it's shown only as a hint.
+  const loadRmsOptions = async () => {
+    if (rmsLoadedRef.current || rmsLoading) return;
+    setRmsLoading(true);
+    setRmsError(null);
+    try {
+      const list = await window.nexdigi.winlinkSearchRms({ mode: 'packet' });
+      const seen = new Set();
+      const opts = [];
+      for (const g of list || []) {
+        if (!g || !g.callsign || seen.has(g.callsign)) continue;
+        seen.add(g.callsign);
+        opts.push(g);
+      }
+      setRmsOptions(opts);
+      rmsLoadedRef.current = true;
+    } catch (e) {
+      setRmsError(e.message);
+    } finally {
+      setRmsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (connectAlias === RF_OPTION) loadRmsOptions();
+  }, [connectAlias]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const rfNodeValid = CALLSIGN_RE.test(rfNodeCall.trim().toUpperCase());
+
   const doConnect = async () => {
     if (!connectAlias) return;
+    let url;
+    if (connectAlias === RF_OPTION) {
+      if (!rfNodeValid) {
+        setLog((prev) => [...prev.slice(-200), 'Connect failed: enter a valid node callsign (e.g. NA4WX-10)']);
+        return;
+      }
+      url = `ax25:///${rfNodeCall.trim().toUpperCase()}`;
+    } else {
+      url = aliases[connectAlias];
+    }
     setConnecting(true);
     try {
-      await window.nexdigi.winlinkConnect(aliases[connectAlias]);
+      await window.nexdigi.winlinkConnect(url);
       await refreshFolder(folder);
     } catch (e) {
       setLog((prev) => [...prev.slice(-200), `Connect failed: ${e.message}`]);
@@ -114,9 +192,58 @@ export default function WinlinkMail({ onOpenSettings }) {
         <Button size="small" variant="contained" startIcon={<AddIcon />} onClick={() => setComposeOpen(true)}>Compose</Button>
         <Select size="small" value={connectAlias} onChange={(e) => setConnectAlias(e.target.value)} displayEmpty sx={{ minWidth: 220 }}>
           {Object.keys(aliases).length === 0 && <MenuItem value="" disabled>No connect targets configured</MenuItem>}
-          {Object.keys(aliases).map((k) => <MenuItem key={k} value={k}>{k}</MenuItem>)}
+          {Object.keys(aliases).map((k) => <MenuItem key={k} value={k}>{aliasLabel(k)}</MenuItem>)}
+          <MenuItem value={RF_OPTION}>RF (RMS Gateway)</MenuItem>
         </Select>
-        <Button size="small" startIcon={<CallMadeIcon />} disabled={!connectAlias || connecting} onClick={doConnect}>
+        {connectAlias === RF_OPTION && (
+          <Autocomplete
+            size="small"
+            freeSolo
+            autoSelect
+            options={rmsOptions}
+            loading={rmsLoading}
+            getOptionLabel={(o) => (typeof o === 'string' ? o : o.callsign)}
+            isOptionEqualToValue={(o, v) => o.callsign === (typeof v === 'string' ? v : v.callsign)}
+            filterOptions={(opts, state) => {
+              const input = state.inputValue.trim().toUpperCase();
+              const matches = input ? opts.filter((o) => o.callsign.toUpperCase().includes(input)) : opts;
+              return matches.slice(0, 50);
+            }}
+            inputValue={rfNodeCall}
+            onInputChange={(_e, value) => setRfNodeCall(value.toUpperCase())}
+            onChange={(_e, value) => setRfNodeCall(((typeof value === 'string' ? value : value && value.callsign) || '').toUpperCase())}
+            renderOption={(props, option) => (
+              <Box component="li" {...props} key={option.callsign}>
+                <Box>
+                  <Typography variant="body2">{option.callsign}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {[option.gridsquare, Number.isFinite(option.distance) ? `${Math.round(option.distance)} mi` : null, option.modes, option.freq && option.freq.desc].filter(Boolean).join(' · ')}
+                  </Typography>
+                </Box>
+              </Box>
+            )}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Node callsign"
+                placeholder="e.g. NA4WX-10"
+                error={rfNodeCall.length > 0 && !rfNodeValid}
+                helperText={rmsError ? `Gateway list unavailable: ${rmsError}` : undefined}
+                InputProps={{
+                  ...params.InputProps,
+                  endAdornment: (
+                    <>
+                      {rmsLoading && <CircularProgress size={16} sx={{ mr: 1 }} />}
+                      {params.InputProps.endAdornment}
+                    </>
+                  )
+                }}
+              />
+            )}
+            sx={{ minWidth: 260 }}
+          />
+        )}
+        <Button size="small" startIcon={<CallMadeIcon />} disabled={!connectAlias || (connectAlias === RF_OPTION && !rfNodeValid) || connecting} onClick={doConnect}>
           {connecting ? 'Connecting…' : 'Connect'}
         </Button>
         <Button size="small" color="error" startIcon={<CallEndIcon />} onClick={() => window.nexdigi.winlinkDisconnect(true)}>

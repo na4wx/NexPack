@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Tabs, Tab } from '@mui/material';
 import TerminalSettingsPanel from '../components/settings/TerminalSettingsPanel';
-import BbsSettingsPanel from '../components/settings/BbsSettingsPanel';
 import WinlinkSettingsPanel from '../components/settings/WinlinkSettingsPanel';
 import ChatSettingsPanel from '../components/settings/ChatSettingsPanel';
 import AprsSettingsPanel from '../components/settings/AprsSettingsPanel';
@@ -9,7 +8,6 @@ import AboutSettingsPanel from '../components/settings/AboutSettingsPanel';
 
 const TABS = [
   { key: 'terminal', label: 'Terminal' },
-  { key: 'bbs', label: 'BBS' },
   { key: 'winlink', label: 'Winlink' },
   { key: 'chat', label: 'Chat' },
   { key: 'aprs', label: 'APRS' },
@@ -31,7 +29,6 @@ export default function SettingsPage({ tncs, initialTab }) {
       </Tabs>
       <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: 3 }}>
         {tab === 'terminal' && <TerminalSettingsPanel tncs={tncs} />}
-        {tab === 'bbs' && <BbsSettingsPanel tncs={tncs} />}
         {tab === 'winlink' && <WinlinkSettingsPanel />}
         {tab === 'chat' && <ChatSettingsPanel tncs={tncs} />}
         {tab === 'aprs' && <AprsSettingsPanel tncs={tncs} />}
