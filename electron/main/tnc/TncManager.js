@@ -189,9 +189,9 @@ class TncManager extends EventEmitter {
     } else if (t.config.type === 'soundmodem') {
       if (!this.soundModemManager) throw new Error('sound modem support is not available');
       this._setStatus(t, 'connecting');
-      let port, agwPort;
+      let port;
       try {
-        ({ port, agwPort } = await this.soundModemManager.startFor(tncId, {
+        ({ port } = await this.soundModemManager.startFor(tncId, {
           ...conn,
           callsign: (t.config.radios[0] && t.config.radios[0].callsign) || 'N0CALL'
         }));
@@ -199,7 +199,6 @@ class TncManager extends EventEmitter {
         this._setStatus(t, 'error', e);
         return;
       }
-      t.agwPort = agwPort;
       t.adapter = new KissTcpAdapter({ host: '127.0.0.1', port });
       this._wireAdapter(t);
       return;
@@ -208,32 +207,6 @@ class TncManager extends EventEmitter {
     }
     this._wireAdapter(t);
     this._setStatus(t, 'connecting');
-  }
-
-  // Resolves a radio into a real AGWPE host/port pat (the Winlink client)
-  // can dial into — pat's ax25 engine only ever speaks AGWPE, never raw
-  // KISS, so a 'serial'/'kiss-tcp' radio has no AGWPE endpoint at all and
-  // resolves to null. An 'agwpe'-type TNC already IS one, no connection
-  // needed to read its config. A 'soundmodem' (built-in Direwolf) radio
-  // needs the TNC actually running first, since its AGWPE port is only
-  // known once Direwolf has started (see SoundModemManager) — connectTnc()
-  // is a no-op if it's already up.
-  async getAgwpeEndpoint(tncId, radioId) {
-    const t = this.tncs.get(tncId);
-    if (!t) return null;
-    const radio = t.config.radios.find((r) => r.id === radioId);
-    const radioPort = radio ? radio.portNumber || 0 : 0;
-    if (t.config.type === 'agwpe') {
-      const conn = t.config.connection || {};
-      if (!conn.host || !conn.port) return null;
-      return { host: conn.host, port: conn.port, radioPort };
-    }
-    if (t.config.type === 'soundmodem') {
-      if (!t.agwPort) await this.connectTnc(tncId);
-      if (!t.agwPort) return null;
-      return { host: '127.0.0.1', port: t.agwPort, radioPort: 0 };
-    }
-    return null;
   }
 
   async disconnectTnc(tncId) {
@@ -519,7 +492,12 @@ class TncManager extends EventEmitter {
       try { text = payload.toString('utf8'); } catch (e) { /* ignore */ }
       session.buffer.push(text);
       if (this.sessionLogger) this.sessionLogger.appendLog(session, 'rx', text);
-      this.emit('session-data', { sessionId: session.id, text });
+      // `raw` carries the untouched bytes alongside `text` — a UTF-8 round
+      // trip is lossy for arbitrary binary payloads (e.g. the AGWPE bridge
+      // relaying Winlink's compressed message bodies through a session),
+      // where invalid byte sequences would otherwise get silently mangled
+      // into U+FFFD replacement characters.
+      this.emit('session-data', { sessionId: session.id, text, raw: payload });
     }
   }
 

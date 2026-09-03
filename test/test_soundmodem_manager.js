@@ -171,43 +171,6 @@ async function main() {
     }
   });
 
-  await test('TncManager.getAgwpeEndpoint(): an "agwpe" TNC resolves synchronously from its own config, no connection needed', async () => {
-    const tncMgr = new TncManager({ userDataDir: dir });
-    const tnc = tncMgr.createTnc({ name: 'External AGWPE', type: 'agwpe', connection: { host: '192.0.2.5', port: 8010 } });
-    const radio = tncMgr.addRadio(tnc.id, { callsign: 'NA4WX-10', name: 'Winlink', portNumber: 2 });
-    const ep = await tncMgr.getAgwpeEndpoint(tnc.id, radio.id);
-    assert.deepStrictEqual(ep, { host: '192.0.2.5', port: 8010, radioPort: 2 });
-  });
-
-  await test('TncManager.getAgwpeEndpoint(): a "serial"/"kiss-tcp" TNC has no AGWPE endpoint (pat can only speak AGWPE)', async () => {
-    const tncMgr = new TncManager({ userDataDir: dir });
-    const tnc = tncMgr.createTnc({ name: 'Raw KISS-TCP', type: 'kiss-tcp', connection: { host: '127.0.0.1', port: 8001 } });
-    const radio = tncMgr.addRadio(tnc.id, { callsign: 'NA4WX-11', name: 'Terminal', portNumber: 0 });
-    const ep = await tncMgr.getAgwpeEndpoint(tnc.id, radio.id);
-    assert.strictEqual(ep, null);
-  });
-
-  await test('TncManager.getAgwpeEndpoint(): a "soundmodem" TNC connects itself (if needed) and resolves its real dynamic AGWPE port', async () => {
-    const bin = writeFakeDirewolf(dir);
-    process.env.NEXPACK_DIREWOLF_PATH = bin;
-    try {
-      const smMgr = new SoundModemManager({ userDataDir: dir });
-      const tncMgr = new TncManager({ userDataDir: dir, soundModemManager: smMgr });
-      const tnc = tncMgr.createTnc({ name: 'Sound Card TNC', type: 'soundmodem', connection: { audioInputDevice: 'fake-in', audioOutputDevice: 'fake-out', pttMethod: 'none' } });
-      const radio = tncMgr.addRadio(tnc.id, { callsign: 'NA4WX-12', name: 'Winlink', portNumber: 0 });
-
-      const ep = await tncMgr.getAgwpeEndpoint(tnc.id, radio.id);
-      assert.ok(ep, 'expected a resolved AGWPE endpoint');
-      assert.strictEqual(ep.host, '127.0.0.1');
-      assert.ok(ep.port > 0);
-      assert.ok(smMgr.isRunning(tnc.id), 'resolving the endpoint should have started the sound modem on demand');
-
-      await tncMgr.disconnectTnc(tnc.id);
-    } finally {
-      delete process.env.NEXPACK_DIREWOLF_PATH;
-    }
-  });
-
   await test('_probeDefaultDevices() against the real bundled direwolf on this platform, if any: finds real default device names', async () => {
     const realBin = path.join(
       __dirname, '..', 'direwolf',
@@ -289,21 +252,6 @@ async function main() {
       await mgr.stopFor('real-tnc');
     });
 
-    await test(`real bundled direwolf (${process.platform}/${process.arch}) also opens a real AGWPE port alongside KISS — needed for Winlink RF`, async () => {
-      // pat (the Winlink client) can't speak KISS at all — only AGWPE — so
-      // this is what makes "Built-in Sound Modem" usable as a Winlink RF
-      // radio. Direwolf serves both protocols off the same running
-      // instance; this proves that second port really comes up, not just
-      // that startFor() returns a number for it.
-      const mgr = new SoundModemManager({ userDataDir: dir, resourcesPath: path.join(__dirname, '..') });
-      const { port, agwPort } = await mgr.startFor('real-tnc-agw', { pttMethod: 'none', callsign: 'N0CALL' });
-      assert.ok(agwPort > 0 && agwPort !== port, 'expected a distinct real AGWPE port');
-      await new Promise((resolve, reject) => {
-        const sock = net.createConnection({ host: '127.0.0.1', port: agwPort }, () => { sock.end(); resolve(); });
-        sock.on('error', reject);
-      });
-      await mgr.stopFor('real-tnc-agw');
-    });
   } else {
     console.log(`(skipping real-bundled-binary test — no direwolf built for ${process.platform}/${process.arch} yet)`);
   }

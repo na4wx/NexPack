@@ -23,6 +23,7 @@ const files = [
   'test_winlink_settings_restart.js',
   'test_winlink_spawn_error.js',
   'test_winlink_rf_radio.js',
+  'test_agwpe_bridge.js',
   'test_aprs_parser.js',
   'test_aprs_manager_rf.js',
   'test_aprs_manager_tx.js',

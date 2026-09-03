@@ -13,14 +13,13 @@ export default function WinlinkSettingsPanel({ tncs }) {
   const [saved, setSaved] = useState(false);
 
   // pat (the Winlink client) can only ever speak AGWPE for AX.25 — never
-  // raw KISS — so only 'agwpe' TNCs (already an AGWPE endpoint) and
-  // NexPack's own 'soundmodem' (built-in Direwolf, which opens a real AGWPE
-  // port alongside its KISS one specifically so this works) are usable
-  // here. A 'serial'/'kiss-tcp' TNC has no AGWPE endpoint pat could reach.
+  // raw KISS — but NexPack bridges that itself now (AgwpeBridgeServer):
+  // pat always talks to that local bridge, which drives the ACTUAL chosen
+  // radio through TncManager, the same AX.25 stack Terminal/BBS/Chat/APRS
+  // use. So any radio of any TNC type works here, not just AGWPE-native ones.
   const radios = useMemo(() => {
     const list = [];
     for (const tnc of tncs || []) {
-      if (tnc.type !== 'agwpe' && tnc.type !== 'soundmodem') continue;
       for (const r of tnc.radios) list.push({ key: `${tnc.id}:${r.id}`, tncId: tnc.id, radioId: r.id, tnc, radio: r });
     }
     return list;
@@ -70,10 +69,7 @@ export default function WinlinkSettingsPanel({ tncs }) {
         {radios.map((r) => <MenuItem key={r.key} value={r.key}>{radioLabel(r.tnc, r.radio)}</MenuItem>)}
       </TextField>
       {radios.length === 0 && (
-        <Alert severity="info">
-          No AGWPE-capable radios configured yet — add an AGWPE TNC, or use the built-in Sound Modem, under
-          TNCs &amp; Radios in the nav. (A serial/KISS-TCP TNC can't be used here — Winlink's client only speaks AGWPE.)
-        </Alert>
+        <Alert severity="info">No radios configured yet — add one under TNCs &amp; Radios in the nav.</Alert>
       )}
       <Typography variant="caption" color="text.secondary">
         This is which radio Winlink reaches an RMS Gateway through — the actual gateway callsign to connect to

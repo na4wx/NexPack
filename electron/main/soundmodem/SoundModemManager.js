@@ -78,10 +78,7 @@ class SoundModemManager extends EventEmitter {
 
   // config: { audioInputDevice, audioOutputDevice, pttMethod ('vox'|'cm108'|'rts'|'dtr'|'none'), pttDevice, callsign }
   async startFor(tncId, config) {
-    if (this.instances.has(tncId)) {
-      const existing = this.instances.get(tncId);
-      return { port: existing.port, agwPort: existing.agwPort };
-    }
+    if (this.instances.has(tncId)) return { port: this.instances.get(tncId).port };
 
     const bin = this._resolveBinaryPath();
     let effectiveConfig = config;
@@ -93,19 +90,12 @@ class SoundModemManager extends EventEmitter {
     }
 
     const port = await this._reservePort();
-    // A second, real AGWPE port alongside KISS — Direwolf happily serves
-    // both protocols off the same running instance. NexPack's own AX.25
-    // stack (TncManager) only ever needs the KISS port, but `pat` (the
-    // Winlink client) can't speak KISS at all — its ax25 engine only knows
-    // AGWPE — so this is what lets "Built-in Sound Modem" be picked as a
-    // Winlink RF radio at all.
-    const agwPort = await this._reservePort();
     const confPath = this._confPathFor(tncId);
-    fs.writeFileSync(confPath, this._buildConfig({ ...effectiveConfig, port, agwPort }));
+    fs.writeFileSync(confPath, this._buildConfig({ ...effectiveConfig, port }));
 
     const proc = spawn(bin, ['-c', confPath, '-t', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
 
-    const inst = { proc, port, agwPort, confPath };
+    const inst = { proc, port, confPath };
     this.instances.set(tncId, inst);
 
     proc.stdout.on('data', (d) => this.emit('log', { tncId, line: d.toString() }));
@@ -139,7 +129,7 @@ class SoundModemManager extends EventEmitter {
       starting = false;
     }
 
-    return { port, agwPort };
+    return { port };
   }
 
   async stopFor(tncId) {
@@ -347,7 +337,7 @@ class SoundModemManager extends EventEmitter {
   // single-word device names instead of two real ones (found running the
   // real bundled binary against its own real default device names — it
   // took "MacBook" as the whole input device and failed).
-  _buildConfig({ audioInputDevice, audioOutputDevice, pttMethod, pttDevice, callsign, port, agwPort }) {
+  _buildConfig({ audioInputDevice, audioOutputDevice, pttMethod, pttDevice, callsign, port }) {
     const inDev = (audioInputDevice || '').trim();
     const outDev = (audioOutputDevice || '').trim();
     const lines = [];
@@ -367,7 +357,7 @@ class SoundModemManager extends EventEmitter {
       `MYCALL ${(callsign || 'N0CALL').toUpperCase()}`,
       'MODEM 1200',
       `KISSPORT ${port}`,
-      `AGWPORT ${agwPort || 0}`
+      'AGWPORT 0'
     );
     switch (pttMethod) {
       case 'cm108':

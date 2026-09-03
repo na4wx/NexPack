@@ -3,6 +3,7 @@ const path = require('path');
 const TncManager = require('./tnc/TncManager');
 const ScriptManager = require('./tnc/ScriptManager');
 const PatManager = require('./winlink/PatManager');
+const AgwpeBridgeServer = require('./winlink/AgwpeBridgeServer');
 const SoundModemManager = require('./soundmodem/SoundModemManager');
 const NexDigiClient = require('./bbs/NexDigiClient');
 const RfBbsClient = require('./bbs/RfBbsClient');
@@ -21,6 +22,7 @@ let mainWindow;
 let tncManager;
 let scriptManager;
 let patManager;
+let agwpeBridgeServer;
 let soundModemManager;
 let nexDigiClient;
 let rfBbsClient;
@@ -61,11 +63,18 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   soundModemManager = new SoundModemManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath });
   tncManager = new TncManager({ configPath: path.join(app.getPath('userData'), 'tncs.json'), userDataDir: app.getPath('userData'), soundModemManager });
   scriptManager = new ScriptManager({ userDataDir: app.getPath('userData'), tncManager });
-  patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath, tncManager });
+  // Lets `pat` (which can only ever speak AGWPE, never raw KISS) drive
+  // Winlink RF through ANY of NexPack's own configured radios — see
+  // AgwpeBridgeServer.js. patManager is referenced via closure since it's
+  // constructed just below; getRadio() is only ever actually called later,
+  // on an incoming connect, well after that assignment happens.
+  agwpeBridgeServer = new AgwpeBridgeServer({ tncManager, getRadio: () => patManager.getRfRadio() });
+  const agwpeBridgePort = await agwpeBridgeServer.start();
+  patManager = new PatManager({ userDataDir: app.getPath('userData'), resourcesPath: process.resourcesPath, agwpeBridgePort });
   nexDigiClient = new NexDigiClient({ userDataDir: app.getPath('userData') });
   rfBbsClient = new RfBbsClient({ userDataDir: app.getPath('userData'), tncManager });
   bbsFacade = new BbsFacade({ userDataDir: app.getPath('userData'), nexDigiClient, rfBbsClient });
@@ -272,6 +281,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (rfChatClient) rfChatClient.disconnect();
+  if (agwpeBridgeServer) agwpeBridgeServer.stop();
   if (tncManager) tncManager.shutdown();
   if (chatManager) chatManager.disconnect();
   if (aprsManager) aprsManager.shutdown();

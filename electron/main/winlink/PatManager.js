@@ -34,7 +34,14 @@ const CONNECT_TIMEOUT_MS = 120000;
 //   GET    /api/rmslist?...                  -> RMS gateway directory search
 //   WS     /ws                               -> live status/console feed (JSON messages)
 class PatManager extends EventEmitter {
-  constructor({ userDataDir, resourcesPath, tncManager }) {
+  // agwpeBridgePort: the local port of NexPack's own AgwpeBridgeServer (see
+  // AgwpeBridgeServer.js) — pat is always pointed at that bridge, never at
+  // a real external AGWPE TNC directly. The bridge itself is what actually
+  // resolves the user's chosen radio (via getRfRadio() below) and drives it
+  // through TncManager, which is how Winlink RF ends up able to use ANY
+  // configured radio type (serial/KISS-TCP/AGWPE/Sound Modem) — pat itself
+  // still only ever speaks AGWPE, it just never has to know that.
+  constructor({ userDataDir, resourcesPath, agwpeBridgePort }) {
     super();
     this.dataDir = path.join(userDataDir, 'winlink');
     this.configPath = path.join(this.dataDir, 'config.json');
@@ -42,7 +49,7 @@ class PatManager extends EventEmitter {
     this.mboxDir = path.join(this.dataDir, 'mbox');
     this.pidFilePath = path.join(this.dataDir, 'pat.pid');
     this.resourcesPath = resourcesPath;
-    this.tncManager = tncManager;
+    this.agwpeBridgePort = agwpeBridgePort;
     this.port = null;
     this.proc = null;
     this.ws = null;
@@ -51,10 +58,9 @@ class PatManager extends EventEmitter {
   }
 
   // Which NexPack radio (from TNCs & Radios) to reach an RMS Gateway
-  // through — kept separate from pat's own config.json (below) since it
-  // names a NexPack radio, not a pat setting, and its real AGWPE address is
-  // resolved fresh on every start (see _resolveAgwpeConfig) rather than
-  // being written here.
+  // through — read live by AgwpeBridgeServer on every connect attempt, not
+  // baked into pat's own config.json, since the bridge (not pat) is what
+  // actually resolves and drives it.
   getRfRadio() {
     if (!fs.existsSync(this.rfRadioPath)) return null;
     try { return JSON.parse(fs.readFileSync(this.rfRadioPath, 'utf8')); } catch (e) { return null; }
@@ -64,24 +70,13 @@ class PatManager extends EventEmitter {
     fs.writeFileSync(this.rfRadioPath, JSON.stringify(rfRadio || null, null, 2));
   }
 
-  // Resolves the configured radio into a real AGWPE {addr, radio_port} for
-  // pat's config — null if no radio is configured, the radio no longer
-  // exists, or (for the built-in Sound Modem) it isn't actually reachable
-  // right now. Called fresh on every start(), not just on save: a
-  // 'soundmodem' radio's AGWPE port is only assigned when Direwolf actually
-  // starts and can differ between runs, so a value baked in once at save
-  // time would go stale.
-  async _resolveAgwpeConfig() {
-    const rfRadio = this.getRfRadio();
-    if (!rfRadio || !rfRadio.tncId || !rfRadio.radioId || !this.tncManager) return null;
-    try {
-      const ep = await this.tncManager.getAgwpeEndpoint(rfRadio.tncId, rfRadio.radioId);
-      if (!ep) return null;
-      return { addr: `${ep.host}:${ep.port}`, radio_port: ep.radioPort || 0 };
-    } catch (e) {
-      this.emit('log', `Could not reach the configured RF radio for Winlink: ${e.message}\n`);
-      return null;
-    }
+  // pat is ALWAYS pointed at NexPack's own AgwpeBridgeServer, not a real
+  // external AGWPE TNC — falls back to the old hardcoded default only if
+  // this PatManager somehow wasn't given a bridge port (shouldn't happen
+  // outside of a test constructing PatManager on its own).
+  _agwpeConfig() {
+    if (!this.agwpeBridgePort) return { addr: '127.0.0.1:8000', radio_port: 0 };
+    return { addr: `127.0.0.1:${this.agwpeBridgePort}`, radio_port: 0 };
   }
 
   // If a previous run of NexPack died without cleanly stopping pat (crash,
@@ -164,13 +159,7 @@ class PatManager extends EventEmitter {
   // Deliberately does no async work before this write (and no earlier
   // await in the whole function): callers throughout this codebase call
   // saveSettings() without awaiting it and rely on the file already being
-  // correct by the next synchronous line. The actual AGWPE address for a
-  // chosen rfRadio is NOT resolved here — only _doStart() resolves it (see
-  // _resolveAgwpeConfig), since a 'soundmodem' radio's real AGWPE port
-  // isn't known until Direwolf is actually running, and re-resolving fresh
-  // on every start keeps it from going stale across restarts anyway. The
-  // restart path below already calls start(), so a live radio change still
-  // takes effect immediately without needing it resolved here too.
+  // correct by the next synchronous line.
   async saveSettings({ callsign, winlinkPassword, connectAliases = {}, rfRadio }) {
     const base = this.getSettings() || {};
     if (rfRadio !== undefined) this._saveRfRadio(rfRadio);
@@ -181,7 +170,7 @@ class PatManager extends EventEmitter {
       http_addr: base.http_addr || '127.0.0.1:0',
       connect_aliases: { ...(base.connect_aliases || {}), ...connectAliases },
       ax25: base.ax25 || { engine: 'agwpe', rig: '', beacon: { every: 0, message: '', destination: 'IDENT' } },
-      agwpe: base.agwpe || { addr: '127.0.0.1:8000', radio_port: 0 }
+      agwpe: this._agwpeConfig()
     };
     fs.writeFileSync(this.configPath, JSON.stringify(merged, null, 2));
     if (this.proc || this._startPromise) {
@@ -218,11 +207,7 @@ class PatManager extends EventEmitter {
     });
     const settings = this.getSettings();
     settings.http_addr = `127.0.0.1:${this.port}`;
-    // Re-resolved here, not just at saveSettings time — a 'soundmodem'
-    // radio's AGWPE port is assigned fresh by Direwolf each run and would
-    // otherwise go stale across restarts (see _resolveAgwpeConfig).
-    const agwpe = await this._resolveAgwpeConfig();
-    if (agwpe) settings.agwpe = agwpe;
+    settings.agwpe = this._agwpeConfig();
     fs.writeFileSync(this.configPath, JSON.stringify(settings, null, 2));
 
     const bin = this._resolveBinaryPath();
