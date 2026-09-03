@@ -453,7 +453,7 @@ class TncManager extends EventEmitter {
         if (distance <= 4) session.pendingRx.set(ns, parsed.payload);
       }
       const rrControl = buildSupervisoryControl(S_TYPE.RR, session.vr, incomingPf);
-      this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: rrControl, pid: null, payload: Buffer.alloc(0) }));
+      this._txAx25Frame(t, radio, buildAx25Frame({ dest: srcCall, src: radio.callsign, control: rrControl, pid: null, payload: Buffer.alloc(0), commandType: 'response' }));
       session.t3MissedPolls = 0;
       this._armT3(t, radio, session);
     } else if (frameType === 'supervisory' && session && session.state === 'connected') {
@@ -480,7 +480,7 @@ class TncManager extends EventEmitter {
         // regardless of frame type — without this, a peer's keep-alive check
         // just gets silently ignored until it gives up and disconnects.
         const respControl = buildSupervisoryControl(S_TYPE.RR, session.vr, true);
-        const respFrame = buildAx25Frame({ dest: srcCall, src: radio.callsign, control: respControl, pid: null, payload: Buffer.alloc(0), path: session.path });
+        const respFrame = buildAx25Frame({ dest: srcCall, src: radio.callsign, control: respControl, pid: null, payload: Buffer.alloc(0), path: session.path, commandType: 'response' });
         this._txAx25Frame(t, radio, respFrame);
         this._emitMonitor(t, radio, 'tx', 'rr', { addresses: [{ callsign: srcCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: respControl, payload: Buffer.alloc(0) }, respFrame);
       }
@@ -649,7 +649,7 @@ class TncManager extends EventEmitter {
     session.t3Timer = setTimeout(() => {
       if (!this.sessions.has(session.key) || session.state !== 'connected') return;
       const pollControl = buildSupervisoryControl(S_TYPE.RR, session.vr, true);
-      const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: pollControl, pid: null, payload: Buffer.alloc(0), path: session.path });
+      const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: pollControl, pid: null, payload: Buffer.alloc(0), path: session.path, commandType: 'command' });
       if (!this._txAx25Frame(t, radio, frame)) {
         this._giveUp(session, `TNC disconnected while ${session.remoteCall} was connected.`);
         return;

@@ -145,6 +145,27 @@ function formatCallsign(callsign, ssid) {
 
 module.exports = { parseAx25Frame, parseAddressField, formatCallsign, serviceAddressInBuffer, _callsignBase };
  
+// Classifies a control byte's default AX.25 command/response sense (AX.25
+// 2.0/2.2 §4.3.3, §6.1.2) — returns undefined for S-frames (RR/RNR/REJ/
+// SREJ) and anything else genuinely ambiguous by control byte alone, which
+// callers must resolve themselves via the explicit commandType option.
+function classifyDefaultCommandType(control) {
+  if (control === 0x03 || control === 0x13) return 'command'; // UI (P/F variants)
+  const isUFrame = (control & 0x03) === 0x03;
+  if (isUFrame) {
+    const stripped = control & ~0x10; // ignore P/F bit for matching
+    if (stripped === 0x2f || stripped === 0x6f) return 'command';  // SABM / SABME
+    if (stripped === 0x43) return 'command';  // DISC
+    if (stripped === 0x63) return 'response'; // UA
+    if (stripped === 0x0f) return 'response'; // DM
+    if (stripped === 0x87) return 'response'; // FRMR
+    return undefined; // XID/TEST etc. — genuinely either; no call site builds these today
+  }
+  const isIFrame = (control & 0x01) === 0x00;
+  if (isIFrame) return 'command'; // "Information Command Frame" per §4.3.1 — always a command
+  return undefined; // S-frame (bit0=1, bit1=0) — spec allows either; caller must specify
+}
+
 // Build an AX.25 frame (destination, source, optional digipeater path) with given control/pid/payload
 // control: 0x2F SABM, 0x63 UA, 0x43 DISC, 0x0F DM, 0x03 UI, 0x00 I (Ns=0/Nr=0)
 // path: optional array of digipeater tokens, e.g. ['WIDE1-1', 'WIDE2-1'] (max 8 per AX.25 spec)
@@ -162,21 +183,23 @@ function buildAx25Frame(opts) {
   // AX.25 V2.0 Command/Response bit (C) usage simplified:
   // For a Command frame: set C bit (bit7) of destination, clear in source.
   // For a Response frame: clear C bit in destination, set in source.
-  // Every call site in this codebase leaves commandType unset — none of
-  // them ever passed it, connected-mode included — which meant every frame
-  // this app has ever sent went out with C=0/C=0 on dest/src. For UI
-  // frames (APRS beacons, messages, unproto) that's wrong: real APRS
-  // traffic is encoded as a command frame (dest C=1, src C=0), confirmed
-  // against how Direwolf itself builds a fresh UI frame from scratch
-  // (ax25_from_text in ax25_pad.c: SSID_H_MASK set on the destination
-  // address, not on source). Defaulting UI frames to command semantics is
-  // a real, confirmed fix for real digipeaters/software ignoring our
-  // packets. Connected-mode frames (SABM/UA/DISC/I/S) keep the old
-  // both-cleared default here deliberately — that byte pattern is already
-  // proven working over real RF across this whole project's AX.25
-  // reliability testing, and changing it wasn't needed to fix the actual
-  // reported bug, so it isn't touched.
-  const effectiveCommandType = commandType || (control === 0x03 ? 'command' : undefined);
+  // Per AX.25 2.0/2.2 §6.1.2: a compliant peer reads BOTH C bits being 0 as
+  // "the far end is running a pre-2.0 implementation" — every frame this
+  // app ever built left them both 0 (no call site passed commandType) until
+  // the UI-frame fix below. That was confirmed to break real digipeating.
+  // The SAME violation was still present on every connected-mode frame
+  // (SABM/UA/DISC/I/S — i.e. all of Terminal) since those call sites don't
+  // pass commandType either — classifyDefaultCommandType() below closes
+  // that gap for every frame type identifiable from its control byte alone
+  // (U-frames and I-frames always have the same C/R sense regardless of
+  // context — SABM/DISC/UI are always commands, UA/DM/FRMR are always
+  // responses, I-frames are always "Information Command Frames" per the
+  // spec's own name for them). S-frames (RR/RNR/REJ/SREJ) are the one type
+  // the spec allows to be either a command OR a response depending on
+  // context (an unsolicited/ack RR vs. a poll query vs. a poll reply) — no
+  // default is safe for those, so callers building an S-frame must keep
+  // passing commandType explicitly (see TncManager.js's three RR call sites).
+  const effectiveCommandType = commandType || classifyDefaultCommandType(control);
   if (effectiveCommandType === 'command') {
     destAddr[6] = destAddr[6] | 0x80;      // set C bit in dest
     srcAddr[6] = srcAddr[6] & ~0x80;       // clear in src
