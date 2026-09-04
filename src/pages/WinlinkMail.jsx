@@ -46,6 +46,14 @@ export default function WinlinkMail({ active, onOpenSettings }) {
   const [rmsLoading, setRmsLoading] = useState(false);
   const [rmsError, setRmsError] = useState(null);
   const rmsLoadedRef = useRef(false);
+  // Hitting Disconnect mid-connect forcibly kills the in-flight connect
+  // attempt at the AGWPE bridge layer (see AgwpeBridgeServer.cancelAll())
+  // — which is real, deliberate cancellation, not a failure. Without this,
+  // the original connect() call's own promise still rejects once its
+  // underlying connection dies, and doConnect's catch block below would
+  // log a confusing "Connect failed: ..." right after the cancellation
+  // message the user was expecting.
+  const cancelledRef = useRef(false);
 
   const boot = async () => {
     const settings = await window.nexdigi.winlinkGetSettings();
@@ -163,15 +171,21 @@ export default function WinlinkMail({ active, onOpenSettings }) {
     } else {
       url = aliases[connectAlias];
     }
+    cancelledRef.current = false;
     setConnecting(true);
     try {
       await window.nexdigi.winlinkConnect(url);
       await refreshFolder(folder);
     } catch (e) {
-      setLog((prev) => [...prev.slice(-200), `Connect failed: ${e.message}`]);
+      if (!cancelledRef.current) setLog((prev) => [...prev.slice(-200), `Connect failed: ${e.message}`]);
     } finally {
       setConnecting(false);
     }
+  };
+
+  const doDisconnect = () => {
+    if (connecting) cancelledRef.current = true;
+    window.nexdigi.winlinkDisconnect(true);
   };
 
   if (configured === false) {
@@ -246,7 +260,7 @@ export default function WinlinkMail({ active, onOpenSettings }) {
         <Button size="small" startIcon={<CallMadeIcon />} disabled={!connectAlias || (connectAlias === RF_OPTION && !rfNodeValid) || connecting} onClick={doConnect}>
           {connecting ? 'Connecting…' : 'Connect'}
         </Button>
-        <Button size="small" color="error" startIcon={<CallEndIcon />} onClick={() => window.nexdigi.winlinkDisconnect(true)}>
+        <Button size="small" color="error" startIcon={<CallEndIcon />} onClick={doDisconnect}>
           Disconnect
         </Button>
         <Box sx={{ flexGrow: 1 }} />
