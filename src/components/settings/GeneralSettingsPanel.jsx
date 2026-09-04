@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Stack, Typography, Button, Alert, CircularProgress, TextField, MenuItem, Divider } from '@mui/material';
+import { Box, Stack, Typography, Button, Alert, CircularProgress, TextField, MenuItem, Divider, Switch, FormControlLabel } from '@mui/material';
 
 const DEFAULT_PAGE_OPTIONS = [
   { value: 'terminal', label: 'Terminal' },
@@ -16,6 +16,7 @@ const DEFAULT_PAGE_OPTIONS = [
 export default function GeneralSettingsPanel() {
   const [defaultPage, setDefaultPage] = useState('terminal');
   const [saved, setSaved] = useState(false);
+  const [showTncStatusBar, setShowTncStatusBar] = useState(true);
 
   const [version, setVersion] = useState(null);
   const [checking, setChecking] = useState(false);
@@ -23,13 +24,23 @@ export default function GeneralSettingsPanel() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    window.nexdigi.appGetSettings().then((s) => setDefaultPage(s.defaultPage || 'terminal'));
+    window.nexdigi.appGetSettings().then((s) => {
+      setDefaultPage(s.defaultPage || 'terminal');
+      setShowTncStatusBar(s.showTncStatusBar !== false);
+    });
     window.nexdigi.checkForUpdate().then((r) => setVersion(r.currentVersion)).catch(() => {});
   }, []);
 
   const saveDefaultPage = async (value) => {
     setDefaultPage(value);
     await window.nexdigi.appSaveSettings({ defaultPage: value });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const saveShowTncStatusBar = async (value) => {
+    setShowTncStatusBar(value);
+    await window.nexdigi.appSaveSettings({ showTncStatusBar: value });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -54,6 +65,13 @@ export default function GeneralSettingsPanel() {
       <TextField select label="Open on launch" value={defaultPage} onChange={(e) => saveDefaultPage(e.target.value)}>
         {DEFAULT_PAGE_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
       </TextField>
+      <FormControlLabel
+        control={<Switch checked={showTncStatusBar} onChange={(e) => saveShowTncStatusBar(e.target.checked)} />}
+        label="Show TNC status bar (TX/RX/DEC lights)"
+      />
+      <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+        A minimal bar at the bottom of the window showing live TX/RX/decode activity for each configured TNC — turn off on smaller screens.
+      </Typography>
       {saved && <Typography variant="body2" color="success.main">Saved</Typography>}
 
       <Divider />

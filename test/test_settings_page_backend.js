@@ -53,6 +53,17 @@ async function main() {
     assert.strictEqual(reloaded.getSettings().defaultPage, 'aprs');
   });
 
+  await test('AppSettings defaults showTncStatusBar to true, and persists turning it off across instances', async () => {
+    const AppSettings = require('../electron/main/settings/AppSettings');
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexpack-settings-test-'));
+    const as = new AppSettings({ userDataDir: freshDir });
+    assert.strictEqual(as.getSettings().showTncStatusBar, true);
+    as.saveSettings({ showTncStatusBar: false });
+    const reloaded = new AppSettings({ userDataDir: freshDir });
+    assert.strictEqual(reloaded.getSettings().showTncStatusBar, false);
+    fs.rmSync(freshDir, { recursive: true, force: true });
+  });
+
   await test('BBS and Chat callsigns are independent, but saving one does not wipe the other', async () => {
     const client = new NexDigiClient({ userDataDir: dir });
     client.saveSettings({ host: 'localhost:3010', password: 'secret', callsign: 'N0CALL' });

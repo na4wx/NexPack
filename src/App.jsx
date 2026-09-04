@@ -13,6 +13,7 @@ import WinlinkMail from './pages/WinlinkMail';
 import ChatWorkspace from './pages/ChatWorkspace';
 import AprsWorkspace from './pages/AprsWorkspace';
 import SettingsPage from './pages/SettingsPage';
+import TncStatusBar from './components/TncStatusBar';
 
 const RAIL_WIDTH = 76;
 
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
 export default function App() {
   const [page, setPage] = useState('terminal');
   const [settingsTab, setSettingsTab] = useState('terminal');
+  const [showTncStatusBar, setShowTncStatusBar] = useState(true);
   const { tncs, refresh } = useTncs();
 
   // Starts on Terminal, then switches to the user's configured default
@@ -35,15 +37,25 @@ export default function App() {
   useEffect(() => {
     window.nexdigi.appGetSettings().then((s) => {
       if (s.defaultPage && s.defaultPage !== 'terminal') setPage(s.defaultPage);
+      setShowTncStatusBar(s.showTncStatusBar !== false);
     });
   }, []);
+
+  // Re-read on every page change (cheap local file) so toggling the status
+  // bar in Settings → General takes effect as soon as you leave that page,
+  // without needing a dedicated "settings changed" event plumbed through.
+  useEffect(() => {
+    if (page === 'settings') return;
+    window.nexdigi.appGetSettings().then((s) => setShowTncStatusBar(s.showTncStatusBar !== false));
+  }, [page]);
 
   // Each workspace's own settings icon calls this to jump straight to its
   // tab in the unified Settings screen, instead of opening its own dialog.
   const openSettings = (tab) => { setSettingsTab(tab); setPage('settings'); };
 
   return (
-    <Box sx={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden' }}>
+    <Box sx={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
       <Drawer
         variant="permanent"
         sx={{
@@ -131,6 +143,8 @@ export default function App() {
         {page === 'tncs' && <TncManagerPage tncs={tncs} onChange={refresh} />}
         {page === 'settings' && <SettingsPage tncs={tncs} initialTab={settingsTab} />}
       </Box>
+    </Box>
+    {showTncStatusBar && <TncStatusBar tncs={tncs} />}
     </Box>
   );
 }
