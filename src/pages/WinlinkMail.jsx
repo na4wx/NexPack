@@ -4,9 +4,11 @@ import AddIcon from '@mui/icons-material/Add';
 import SettingsIcon from '@mui/icons-material/Settings';
 import CallMadeIcon from '@mui/icons-material/CallMade';
 import CallEndIcon from '@mui/icons-material/CallEnd';
+import DescriptionIcon from '@mui/icons-material/DescriptionOutlined';
 import MessageList from '../components/MessageList';
 import MessageReadPane from '../components/MessageReadPane';
 import ComposeDialog from '../components/ComposeDialog';
+import WinlinkFormPicker from '../components/WinlinkFormPicker';
 
 // Connect-alias keys are stored/matched verbatim — this only prettifies how
 // they're displayed in the dropdown.
@@ -36,6 +38,9 @@ export default function WinlinkMail({ active, onOpenSettings }) {
   const [messages, setMessages] = useState([]);
   const [selected, setSelected] = useState(null);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [formPickerOpen, setFormPickerOpen] = useState(false);
+  const [formResult, setFormResult] = useState(null); // {to,cc,subject,body} from a submitted Winlink form, pre-filling Compose
+  const [openingForm, setOpeningForm] = useState(false);
   const [aliases, setAliases] = useState({});
   const [connectAlias, setConnectAlias] = useState('');
   const [rfNodeCall, setRfNodeCall] = useState('');
@@ -123,6 +128,26 @@ export default function WinlinkMail({ active, onOpenSettings }) {
     if (folder === 'out') refreshFolder('out');
   };
 
+  // Opens the real, official Winlink form in its own window (see
+  // WinlinkFormPicker/PatManager.js) and blocks until it's actually
+  // submitted — the composed message then pre-fills the normal Compose
+  // dialog for review before sending, same as pat's own web GUI does.
+  const handleFormSelected = async (templatePath) => {
+    setFormPickerOpen(false);
+    setOpeningForm(true);
+    try {
+      const result = await window.nexdigi.winlinkOpenForm(templatePath);
+      if (result) {
+        setFormResult(result);
+        setComposeOpen(true);
+      }
+    } catch (e) {
+      setLog((prev) => [...prev.slice(-200), `Could not open form: ${e.message}`]);
+    } finally {
+      setOpeningForm(false);
+    }
+  };
+
   // Winlink's own directory of active RMS Gateways (pat downloads and caches
   // it from winlink.org) — fetched lazily the first time RF is picked, not
   // on every page load, since it's a ~1000+ entry directory covering every
@@ -203,7 +228,10 @@ export default function WinlinkMail({ active, onOpenSettings }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-        <Button size="small" variant="contained" startIcon={<AddIcon />} onClick={() => setComposeOpen(true)}>Compose</Button>
+        <Button size="small" variant="contained" startIcon={<AddIcon />} onClick={() => { setFormResult(null); setComposeOpen(true); }}>Compose</Button>
+        <Button size="small" startIcon={<DescriptionIcon />} disabled={openingForm} onClick={() => setFormPickerOpen(true)}>
+          {openingForm ? 'Waiting for form…' : 'New from form'}
+        </Button>
         <Select size="small" value={connectAlias} onChange={(e) => setConnectAlias(e.target.value)} displayEmpty sx={{ minWidth: 220 }}>
           {Object.keys(aliases).length === 0 && <MenuItem value="" disabled>No connect targets configured</MenuItem>}
           {Object.keys(aliases).map((k) => <MenuItem key={k} value={k}>{aliasLabel(k)}</MenuItem>)}
@@ -295,7 +323,7 @@ export default function WinlinkMail({ active, onOpenSettings }) {
             to={selected && selected.To && selected.To.map((t) => t.Addr).join(', ')}
             date={selected && new Date(selected.Date).toLocaleString()}
             body={selected && selected.Body}
-            onReply={selected ? () => setComposeOpen(true) : null}
+            onReply={selected ? () => { setFormResult(null); setComposeOpen(true); } : null}
             onArchive={selected ? async () => { await window.nexdigi.winlinkArchiveMessage(folder, selected.MID); refreshFolder(folder); } : null}
             onDelete={selected ? async () => { await window.nexdigi.winlinkDeleteMessage(folder, selected.MID); refreshFolder(folder); } : null}
           />
@@ -308,12 +336,15 @@ export default function WinlinkMail({ active, onOpenSettings }) {
 
       <ComposeDialog
         open={composeOpen}
-        onClose={() => setComposeOpen(false)}
+        onClose={() => { setComposeOpen(false); setFormResult(null); }}
         onSend={send}
         showCc
-        initialTo={selected ? selected.From.Addr : ''}
-        initialSubject={selected ? `Re: ${selected.Subject}` : ''}
+        initialTo={formResult ? formResult.msg_to : selected ? selected.From.Addr : ''}
+        initialCc={formResult ? formResult.msg_cc : ''}
+        initialSubject={formResult ? formResult.msg_subject : selected ? `Re: ${selected.Subject}` : ''}
+        initialBody={formResult ? formResult.msg_body : ''}
       />
+      <WinlinkFormPicker open={formPickerOpen} onClose={() => setFormPickerOpen(false)} onSelect={handleFormSelected} />
     </Box>
   );
 }

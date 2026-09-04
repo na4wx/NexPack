@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack } from '@mui/material';
 
-export default function ComposeDialog({ open, onClose, onSend, showCc = false, initialTo = '', initialSubject = '', initialBody = '', subjectHelperText = null, subjectDisabled = false }) {
+export default function ComposeDialog({ open, onClose, onSend, showCc = false, initialTo = '', initialCc = '', initialSubject = '', initialBody = '', subjectHelperText = null, subjectDisabled = false }) {
   const [to, setTo] = useState(initialTo);
-  const [cc, setCc] = useState('');
+  const [cc, setCc] = useState(initialCc);
   const [subject, setSubject] = useState(initialSubject);
   const [body, setBody] = useState(initialBody);
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    if (open) { setTo(initialTo); setCc(''); setSubject(initialSubject); setBody(initialBody); }
-  }, [open, initialTo, initialSubject, initialBody]);
+    if (open) { setTo(initialTo); setCc(initialCc); setSubject(initialSubject); setBody(initialBody); }
+  }, [open, initialTo, initialCc, initialSubject, initialBody]);
 
   const submit = async () => {
     setSending(true);

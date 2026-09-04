@@ -65,6 +65,9 @@ contextBridge.exposeInMainWorld('nexdigi', {
   winlinkConnect: (url) => ipcRenderer.invoke('winlink:connect', url),
   winlinkDisconnect: (dirty) => ipcRenderer.invoke('winlink:disconnect', dirty),
   winlinkSearchRms: (params) => ipcRenderer.invoke('winlink:searchRms', params),
+  winlinkListFormCatalog: () => ipcRenderer.invoke('winlink:listFormCatalog'),
+  winlinkUpdateForms: () => ipcRenderer.invoke('winlink:updateForms'),
+  winlinkOpenForm: (templatePath, inReplyTo) => ipcRenderer.invoke('winlink:openForm', templatePath, inReplyTo),
   onWinlinkLog: (cb) => { const l = (_e, line) => cb(line); ipcRenderer.on('winlink-log', l); return () => ipcRenderer.removeListener('winlink-log', l); },
 
   onSoundModemLog: (cb) => { const l = (_e, payload) => cb(payload); ipcRenderer.on('soundmodem-log', l); return () => ipcRenderer.removeListener('soundmodem-log', l); },

@@ -62,6 +62,11 @@ class PatManager extends EventEmitter {
     this.configPath = path.join(this.dataDir, 'config.json');
     this.rfRadioPath = path.join(this.dataDir, 'rf-radio.json');
     this.mboxDir = path.join(this.dataDir, 'mbox');
+    // Standard Winlink Forms (ICS-213, radiograms, etc.) — kept under
+    // NexPack's own userData dir like --mbox above, instead of pat's
+    // implicit systemwide default location, so it's self-contained and
+    // (for tests) properly isolated per instance.
+    this.formsDir = path.join(this.dataDir, 'forms');
     this.pidFilePath = path.join(this.dataDir, 'pat.pid');
     this.resourcesPath = resourcesPath;
     this.agwpeBridgePort = agwpeBridgePort;
@@ -70,6 +75,7 @@ class PatManager extends EventEmitter {
     this.ws = null;
     this._connecting = false;
     fs.mkdirSync(this.mboxDir, { recursive: true });
+    fs.mkdirSync(this.formsDir, { recursive: true });
   }
 
   // Which NexPack radio (from TNCs & Radios) to reach an RMS Gateway
@@ -226,7 +232,7 @@ class PatManager extends EventEmitter {
     fs.writeFileSync(this.configPath, JSON.stringify(settings, null, 2));
 
     const bin = this._resolveBinaryPath();
-    this.proc = spawn(bin, ['--config', this.configPath, '--mbox', this.mboxDir, 'http'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    this.proc = spawn(bin, ['--config', this.configPath, '--mbox', this.mboxDir, '--forms', this.formsDir, 'http'], { stdio: ['ignore', 'pipe', 'pipe'] });
     fs.writeFileSync(this.pidFilePath, String(this.proc.pid));
     this.proc.stdout.on('data', (d) => this.emit('log', d.toString()));
     this.proc.stderr.on('data', (d) => this.emit('log', d.toString()));
@@ -346,6 +352,42 @@ class PatManager extends EventEmitter {
     const text = await res.text();
     if (!res.ok) throw new Error(`send failed -> ${res.status}: ${text}`);
     return text;
+  }
+
+  // Winlink Standard Forms (ICS-213, radiogram, etc.) — pat already has a
+  // complete, real implementation of this (the same one its own bundled
+  // web GUI uses), reverse-engineered by running the real bundled binary
+  // and reading its actual web GUI's JS, not guessed:
+  //   GET  /api/formcatalog            -> {name,path,version,form_count,forms:[],folders:[...]} tree
+  //   POST /api/formsUpdate            -> downloads the latest official templates from winlink.org
+  //   GET  /api/forms?template=<path>  -> renders the real, official HTML form for that template
+  //   (the rendered form's own <form method="post" action="/api/form?template=..."> submits itself —
+  //    nothing else needs to drive that part)
+  //   GET  /api/form                   -> 404 until that form is submitted, then {msg_to,msg_cc,msg_subject,msg_body}
+  // The GET/POST /api/form pair is correlated by a plain browser cookie
+  // named "forminstance" — pat's own web GUI sets it with document.cookie
+  // before opening the form window (same-origin, so the browser attaches
+  // it automatically to the form's own POST); NexPack has to set that same
+  // cookie on whatever BrowserWindow opens the form (see index.js) and
+  // pass it manually here since this uses a plain HTTP client, not that
+  // window's own cookie jar. Confirmed end-to-end against the real binary,
+  // including that submitting a form actually returns
+  // "<script>window.close()</script>" — the window closes itself, no need
+  // to do that from here.
+  listFormCatalog() { return this._request('GET', '/api/formcatalog'); }
+  updateForms() { return this._request('POST', '/api/formsUpdate'); }
+  formUrl(templatePath, inReplyTo) {
+    const qs = new URLSearchParams({ template: templatePath });
+    if (inReplyTo) qs.set('in-reply-to', inReplyTo);
+    return this._url(`/api/forms?${qs.toString()}`);
+  }
+  async getFormResult(forminstanceId) {
+    try {
+      return await this._request('GET', '/api/form', { headers: { Cookie: `forminstance=${forminstanceId}` } });
+    } catch (e) {
+      if (/-> 404:/.test(e.message)) return null; // not submitted yet — not a real error
+      throw e;
+    }
   }
 
   getConnectAliases() { return this._request('GET', '/api/config/connect_aliases'); }

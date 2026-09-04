@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
 const path = require('path');
 const TncManager = require('./tnc/TncManager');
 const ScriptManager = require('./tnc/ScriptManager');
@@ -229,6 +229,65 @@ app.whenReady().then(async () => {
     try { await patManager.disconnect(dirty); } catch (e) { /* cancelAll() already handled the real disconnect */ }
   });
   ipcMain.handle('winlink:searchRms', (_e, params) => patManager.searchRms(params));
+
+  ipcMain.handle('winlink:listFormCatalog', () => patManager.listFormCatalog());
+  ipcMain.handle('winlink:updateForms', () => patManager.updateForms());
+  // Opens the real, official Winlink form (rendered by pat itself) in its
+  // own window and resolves once the user submits it (or null if they
+  // close the window without submitting) — see PatManager.js's forms
+  // comment for the full mechanism this replicates. Blocks the renderer's
+  // call until one of those happens, same as winlink:connect blocking on
+  // pat's own /api/connect.
+  ipcMain.handle('winlink:openForm', async (_e, templatePath, inReplyTo) => {
+    if (!patManager.port) throw new Error('Winlink is not running yet');
+    const forminstanceId = String(Math.floor(1e9 * Math.random()));
+    const origin = `http://127.0.0.1:${patManager.port}`;
+    await session.defaultSession.cookies.set({
+      url: origin,
+      name: 'forminstance',
+      value: forminstanceId,
+      expirationDate: Math.floor(Date.now() / 1000) + 86400
+    });
+    const formWindow = new BrowserWindow({
+      width: 900,
+      height: 900,
+      title: 'Winlink Form',
+      parent: mainWindow,
+      webPreferences: { nodeIntegration: false, contextIsolation: true }
+    });
+    formWindow.loadURL(patManager.formUrl(templatePath, inReplyTo));
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let pollTimer = null;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(pollTimer);
+        if (!formWindow.isDestroyed()) formWindow.close();
+        resolve(result);
+      };
+      pollTimer = setInterval(async () => {
+        try {
+          const result = await patManager.getFormResult(forminstanceId);
+          if (result) finish(result);
+        } catch (e) { /* keep polling */ }
+      }, 1000);
+      // The form's own real submit response closes this window itself
+      // (confirmed: pat returns "<script>window.close()</script>"), which
+      // usually races ahead of the next poll tick — check once more right
+      // here rather than assuming a closed window means the user cancelled.
+      formWindow.on('closed', async () => {
+        if (settled) return;
+        try {
+          const result = await patManager.getFormResult(forminstanceId);
+          finish(result || null);
+        } catch (e) {
+          finish(null);
+        }
+      });
+    });
+  });
 
   // BBS (via NexDigi server REST, or over RF — routed by BbsFacade based on the active transport)
   ipcMain.handle('bbs:getSettings', () => nexDigiClient.getSettings());
