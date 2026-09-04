@@ -73,14 +73,19 @@ export default function ChatSettingsPanel({ tncs }) {
 
   const save = async () => {
     await window.nexdigi.bbsSaveSettings({ host: host.trim(), password, chatCallsign: chatCallsign.trim() });
-    await window.nexdigi.chatSetTransport(transport);
+    await window.nexdigi.chatSetTransport('http');
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
+  // Also saves the transport toggle itself — when RF is selected, this is
+  // the only Save button on screen (the Internet section's fields, and its
+  // own Save button above, are hidden), so it has to cover both rather
+  // than leaving the toggle floating with no way to persist it.
   const saveRf = async () => {
     const r = radios.find((x) => x.key === rfRadioKey);
     await window.nexdigi.rfBbsSaveSettings({ tncId: r ? r.tncId : null, radioId: r ? r.radioId : null, bbsCallsign: bbsCallsign.trim().toUpperCase(), digiPath: parsePathInput(pathStr) });
+    await window.nexdigi.chatSetTransport('rf');
     setRfSaved(true);
     setTimeout(() => setRfSaved(false), 2000);
   };
@@ -122,10 +127,12 @@ export default function ChatSettingsPanel({ tncs }) {
           <TextField label="Your Chat callsign" value={chatCallsign} onChange={(e) => setChatCallsign(e.target.value)} placeholder="N0CALL" />
         </>
       )}
-      <Box>
-        <Button variant="contained" onClick={save}>Save</Button>
-        {saved && <Typography component="span" variant="body2" color="success.main" sx={{ ml: 2 }}>Saved</Typography>}
-      </Box>
+      {transport === 'http' && (
+        <Box>
+          <Button variant="contained" onClick={save}>Save</Button>
+          {saved && <Typography component="span" variant="body2" color="success.main" sx={{ ml: 2 }}>Saved</Typography>}
+        </Box>
+      )}
 
       {transport === 'rf' && (
         <>

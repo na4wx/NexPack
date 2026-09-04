@@ -7,11 +7,11 @@ import AprsSettingsPanel from '../components/settings/AprsSettingsPanel';
 import GeneralSettingsPanel from '../components/settings/GeneralSettingsPanel';
 
 const TABS = [
+  { key: 'general', label: 'General' },
   { key: 'terminal', label: 'Terminal' },
   { key: 'winlink', label: 'Winlink' },
   { key: 'chat', label: 'NexChat' },
-  { key: 'aprs', label: 'APRS' },
-  { key: 'general', label: 'General' }
+  { key: 'aprs', label: 'APRS' }
 ];
 
 export default function SettingsPage({ tncs, initialTab }) {
