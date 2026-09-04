@@ -202,7 +202,14 @@ app.whenReady().then(async () => {
   // made "click Disconnect while it's still connecting" not actually work.
   ipcMain.handle('winlink:disconnect', async (_e, dirty) => {
     agwpeBridgeServer.cancelAll();
-    return patManager.disconnect(dirty);
+    // Best-effort: cancelAll() above already did the real work (ended the
+    // AX.25 session, closed pat's socket to the bridge), so pat's own
+    // /api/disconnect can legitimately 400 here — e.g. pat never
+    // considered itself to have an active session in the first place if
+    // it was cancelled mid-dial rather than mid-session (confirmed live).
+    // That's not a real failure from the user's point of view; don't
+    // surface it as one.
+    try { await patManager.disconnect(dirty); } catch (e) { /* cancelAll() already handled the real disconnect */ }
   });
   ipcMain.handle('winlink:searchRms', (_e, params) => patManager.searchRms(params));
 
