@@ -274,11 +274,18 @@ class SoundModemManager extends EventEmitter {
   //   reads /proc/asound/cards instead (always present when ALSA has any
   //   hardware, no extra package needed) and builds "plughw:CARD=<id>,DEV=0"
   //   tokens, which Direwolf's ALSA open call accepts directly.
-  // - Windows' WINMM backend (audio_win.c) *does* print a device list
-  //   unconditionally, by index and name — but that's unverified here since
-  //   this environment has no way to actually run a Windows binary (no
-  //   Wine). Left returning an empty list rather than shipping unverified
-  //   parsing; the UI's free-text entry still works for Windows users.
+  // - Windows' WINMM backend (audio_win.c) enumerates devices via the same
+  //   waveOutGetNumDevs/waveOutGetDevCaps and waveInGetNumDevs/
+  //   waveInGetDevCaps WinMM API calls Direwolf itself uses internally —
+  //   confirmed by calling that API directly from PowerShell (via
+  //   Add-Type/P-Invoke, no Direwolf process needed) on real Windows
+  //   hardware and cross-checking against Direwolf's own probe output for
+  //   the same machine. Names come back truncated to 31 chars (WinMM's
+  //   MAXPNAMELEN limit, e.g. "Speaker/HP (Realtek High Defini" with no
+  //   closing paren) — this is a real WinMM limitation Direwolf is equally
+  //   subject to, not a parsing bug here, so the truncated string is kept
+  //   as-is: it's exactly what Direwolf's own enumeration would produce and
+  //   match against.
   //
   // Cached per binary path, same reasoning as _probeDefaultDevices.
   async listAudioDevices() {
@@ -286,7 +293,9 @@ class SoundModemManager extends EventEmitter {
     if (this._deviceListCache && this._deviceListCache.bin === bin) return this._deviceListCache.result;
 
     let result = { inputs: [], outputs: [] };
-    if (process.platform === 'darwin') {
+    if (process.platform === 'win32') {
+      result = await this._listWindowsAudioDevices();
+    } else if (process.platform === 'darwin') {
       const output = await this._runDeviceProbe(bin);
       const inputs = [];
       const outputs = [];
@@ -310,6 +319,77 @@ class SoundModemManager extends EventEmitter {
     }
     this._deviceListCache = { bin, result };
     return result;
+  }
+
+  // Calls WinMM's device-enumeration API directly via a PowerShell
+  // Add-Type/P-Invoke script — the exact API Direwolf's own Windows audio
+  // backend calls internally — instead of parsing Direwolf's own stderr
+  // (which requires writing a config file, subject to shell/encoding
+  // pitfalls, and doesn't separate devices onto clearly delimited lines
+  // the way this script's own bracketed-index format does).
+  async _listWindowsAudioDevices() {
+    const script = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class NexPackWinMM {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+  public struct WAVEOUTCAPS {
+    public short wMid; public short wPid;
+    public int vDriverVersion;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szPname;
+    public int dwFormats; public short wChannels; public short wReserved1;
+    public int dwSupport;
+  }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+  public struct WAVEINCAPS {
+    public short wMid; public short wPid;
+    public int vDriverVersion;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szPname;
+    public int dwFormats; public short wChannels; public short wReserved1;
+  }
+  [DllImport("winmm.dll")] public static extern int waveOutGetNumDevs();
+  [DllImport("winmm.dll", CharSet = CharSet.Ansi)] public static extern int waveOutGetDevCaps(IntPtr id, ref WAVEOUTCAPS caps, int size);
+  [DllImport("winmm.dll")] public static extern int waveInGetNumDevs();
+  [DllImport("winmm.dll", CharSet = CharSet.Ansi)] public static extern int waveInGetDevCaps(IntPtr id, ref WAVEINCAPS caps, int size);
+}
+"@
+Write-Output "OUT:"
+for ($i = 0; $i -lt [NexPackWinMM]::waveOutGetNumDevs(); $i++) {
+  $caps = New-Object NexPackWinMM+WAVEOUTCAPS
+  [NexPackWinMM]::waveOutGetDevCaps([IntPtr]$i, [ref]$caps, [System.Runtime.InteropServices.Marshal]::SizeOf($caps)) | Out-Null
+  Write-Output "[$i] $($caps.szPname)"
+}
+Write-Output "IN:"
+for ($i = 0; $i -lt [NexPackWinMM]::waveInGetNumDevs(); $i++) {
+  $caps = New-Object NexPackWinMM+WAVEINCAPS
+  [NexPackWinMM]::waveInGetDevCaps([IntPtr]$i, [ref]$caps, [System.Runtime.InteropServices.Marshal]::SizeOf($caps)) | Out-Null
+  Write-Output "[$i] $($caps.szPname)"
+}
+`.trim();
+
+    const output = await new Promise((resolve) => {
+      let buf = '';
+      const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
+      const done = (() => { let called = false; return () => { if (called) return; called = true; try { proc.kill('SIGKILL'); } catch (e) { /* ignore */ } resolve(buf); }; })();
+      proc.stdout.on('data', (d) => { buf += d.toString(); });
+      proc.on('error', () => done());
+      proc.on('exit', () => done());
+      setTimeout(done, 8000);
+      try { proc.stdin.write(script); proc.stdin.end(); } catch (e) { done(); }
+    });
+
+    const outputs = [];
+    const inputs = [];
+    let section = null;
+    for (const line of output.split(/\r?\n/)) {
+      const t = line.trim();
+      if (t === 'OUT:') { section = outputs; continue; }
+      if (t === 'IN:') { section = inputs; continue; }
+      const m = /^\[(\d+)\]\s*(.+)$/.exec(t);
+      if (m && section) section.push({ name: m[2].trim(), isDefault: Number(m[1]) === 0 });
+    }
+    return { inputs, outputs };
   }
 
   _readAlsaCards() {
