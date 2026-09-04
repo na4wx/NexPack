@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Drawer, List, ListItemButton, ListItemIcon, Tooltip, Typography, Divider } from '@mui/material';
+import { Box, Drawer, List, ListItemButton, ListItemIcon, Tooltip, Divider } from '@mui/material';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import RouterIcon from '@mui/icons-material/Router';
 import MailIcon from '@mui/icons-material/MailOutline';
@@ -14,6 +14,7 @@ import ChatWorkspace from './pages/ChatWorkspace';
 import AprsWorkspace from './pages/AprsWorkspace';
 import SettingsPage from './pages/SettingsPage';
 import TncStatusBar from './components/TncStatusBar';
+import appIcon from './assets/app-icon.png';
 
 const RAIL_WIDTH = 76;
 
@@ -63,9 +64,7 @@ export default function App() {
           '& .MuiDrawer-paper': { width: RAIL_WIDTH, boxSizing: 'border-box', alignItems: 'center', pt: 2 }
         }}
       >
-        <Typography variant="caption" sx={{ fontWeight: 700, letterSpacing: 1, color: 'primary.main', mb: 2 }}>
-          NP
-        </Typography>
+        <Box component="img" src={appIcon} alt="NexPack" sx={{ width: 36, height: 36, mb: 2 }} />
         <Divider flexItem sx={{ mb: 1 }} />
         <List sx={{ width: '100%' }}>
           {NAV_ITEMS.map((item) => (
