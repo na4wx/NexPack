@@ -104,6 +104,14 @@ app.whenReady().then(async () => {
   // entire Electron process — Node throws when 'error' has no listeners.
   patManager.on('error', (err) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', `ERROR: ${err.message}\n`); });
 
+  // Surfaces the bridge's own diagnostic trace (which AGWPE frames it gets
+  // from pat, which radio it resolves, connect/failure outcomes) into the
+  // same Winlink log view pat's own stdout already goes to — previously
+  // wired to nothing, which made it impossible to tell "pat never even
+  // reached the bridge" apart from "the bridge tried and failed" from the
+  // UI alone.
+  agwpeBridgeServer.on('log', (line) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', line); });
+
   soundModemManager.on('log', (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('soundmodem-log', payload); });
   // A direwolf crash after startup has no other listener to catch it —
   // same 'error'-with-zero-listeners crash class documented above for pat.

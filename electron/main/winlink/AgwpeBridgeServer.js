@@ -144,6 +144,7 @@ class AgwpeBridgeServer extends EventEmitter {
   }
 
   _handleSocket(socket) {
+    this.emit('log', 'AGWPE bridge: pat connected to the bridge\n');
     let buf = Buffer.alloc(0);
     this.socketSessions.set(socket, new Set());
     socket.on('data', (chunk) => {
@@ -199,6 +200,7 @@ class AgwpeBridgeServer extends EventEmitter {
         break;
       }
       case 'C': { // connect request
+        this.emit('log', `AGWPE bridge: got connect request ${callFrom} -> ${callTo} on port ${port}\n`);
         this._handleConnect(socket, port, pid, callFrom, callTo);
         break;
       }
@@ -228,12 +230,14 @@ class AgwpeBridgeServer extends EventEmitter {
 
   async _handleConnect(socket, port, pid, callFrom, callTo) {
     const radio = this.getRadio && this.getRadio();
+    this.emit('log', `AGWPE bridge: resolved radio = ${radio ? JSON.stringify(radio) : 'null'}\n`);
     if (!radio || !radio.tncId || !radio.radioId) {
       this._sendDisconnect({ socket, callFrom, callTo, port, sessionId: null }, `*** DISCONNECTED From Station ${callTo} (no radio configured for Winlink RF)\r`);
       return;
     }
     try {
       await this._ensureRadioConnected(radio.tncId);
+      this.emit('log', `AGWPE bridge: radio ${radio.tncId} confirmed connected, starting session to ${callTo}\n`);
       // cancelAll() may have destroyed this socket while the radio was
       // still coming up — don't start a real AX.25 session for a connect
       // attempt the user already cancelled.
@@ -244,6 +248,7 @@ class AgwpeBridgeServer extends EventEmitter {
       const set = this.socketSessions.get(socket);
       if (set) set.add(snap.id);
     } catch (e) {
+      this.emit('log', `AGWPE bridge: connect failed before session start: ${e.message}\n`);
       this._sendDisconnect({ socket, callFrom, callTo, port, sessionId: null }, `*** DISCONNECTED From Station ${callTo} (${e.message})\r`);
     }
   }
