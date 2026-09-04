@@ -72,6 +72,27 @@ async function main() {
     fs.rmSync(dir6, { recursive: true, force: true });
   });
 
+  await test('saveSettings() forces ax25.engine to "agwpe" even over a pre-existing config.json with a stale engine', async () => {
+    const dir7 = fs.mkdtempSync(path.join(os.tmpdir(), 'nexpack-winlink-rf-radio-test7-'));
+    const mgr = new PatManager({ userDataDir: dir7, agwpeBridgePort: 44444 });
+    const configPath = mgr.configPath;
+    // Simulates a config.json left over from before AgwpeBridgeServer
+    // existed, when pat may have been pointed at a real serial TNC
+    // directly. Real bug: saveSettings()'s old `base.ax25 || default` only
+    // filled in the default when ax25 was entirely absent, so an existing
+    // non-agwpe engine here was never corrected — pat would keep dialing
+    // that stale engine directly and never even connect to the bridge
+    // (confirmed live: zero bridge log lines, zero SABM, just a silent
+    // hang to pat's own connect timeout, on a setup with no serial TNC
+    // even present anymore).
+    fs.writeFileSync(configPath, JSON.stringify({ ax25: { engine: 'serial-tnc', path: 'COM3', rig: 'stale' } }));
+    await mgr.saveSettings({ callsign: 'NA4WX', winlinkPassword: '', connectAliases: {} });
+    const ax25 = mgr.getSettings().ax25;
+    assert.strictEqual(ax25.engine, 'agwpe');
+    assert.strictEqual(ax25.rig, 'stale', 'other ax25 fields should be preserved, not wiped');
+    fs.rmSync(dir7, { recursive: true, force: true });
+  });
+
   console.log(`\nTests passed: ${pass}`);
   console.log(`Tests failed: ${fail}`);
   fs.rmSync(dir, { recursive: true, force: true });

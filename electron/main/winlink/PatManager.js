@@ -190,7 +190,17 @@ class PatManager extends EventEmitter {
       secure_login_password: winlinkPassword || '',
       http_addr: base.http_addr || '127.0.0.1:0',
       connect_aliases: { ...(base.connect_aliases || {}), ...connectAliases },
-      ax25: base.ax25 || { engine: 'agwpe', rig: '', beacon: { every: 0, message: '', destination: 'IDENT' } },
+      // engine forced to 'agwpe' unconditionally (not just defaulted when
+      // ax25 is entirely absent) — every RF connect now goes through
+      // AgwpeBridgeServer, so any OTHER engine value already sitting in an
+      // existing config.json (e.g. 'serial-tnc' from before the bridge
+      // existed, still pointing at a real COM port) would make pat dial
+      // that directly instead of ever reaching the bridge at all: no
+      // bridge log lines, no SABM, just a silent hang until pat's own
+      // connect timeout — exactly matching a real report where a
+      // KISS-TCP-only setup (no serial TNC even in the picture) still
+      // produced a full timeout with zero bridge activity.
+      ax25: { ...(base.ax25 || { rig: '', beacon: { every: 0, message: '', destination: 'IDENT' } }), engine: 'agwpe' },
       agwpe: this._agwpeConfig()
     };
     fs.writeFileSync(this.configPath, JSON.stringify(merged, null, 2));
@@ -229,6 +239,12 @@ class PatManager extends EventEmitter {
     const settings = this.getSettings();
     settings.http_addr = `127.0.0.1:${this.port}`;
     settings.agwpe = this._agwpeConfig();
+    // Belt-and-suspenders alongside saveSettings()'s own forced engine:
+    // guarantees a config.json saved before this fix existed (with a stale
+    // 'serial-tnc' or other non-agwpe engine) gets corrected on every real
+    // pat launch too, not only after the user next revisits Winlink
+    // settings and hits Save.
+    settings.ax25 = { ...(settings.ax25 || {}), engine: 'agwpe' };
     fs.writeFileSync(this.configPath, JSON.stringify(settings, null, 2));
 
     const bin = this._resolveBinaryPath();
