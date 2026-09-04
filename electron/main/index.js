@@ -15,6 +15,7 @@ const AprsManager = require('./aprs/AprsManager');
 const MapTileCache = require('./maps/MapTileCache');
 const TerminalSettings = require('./settings/TerminalSettings');
 const InboundServerSettings = require('./settings/InboundServerSettings');
+const AppSettings = require('./settings/AppSettings');
 const InboundNodeServer = require('./tnc/InboundNodeServer');
 const UpdateChecker = require('./UpdateChecker');
 
@@ -34,6 +35,7 @@ let aprsManager;
 let mapTileCache;
 let terminalSettings;
 let inboundServerSettings;
+let appSettings;
 let inboundNodeServer;
 let updateChecker;
 
@@ -85,6 +87,7 @@ app.whenReady().then(async () => {
   mapTileCache = new MapTileCache({ userDataDir: app.getPath('userData') });
   terminalSettings = new TerminalSettings({ userDataDir: app.getPath('userData') });
   inboundServerSettings = new InboundServerSettings({ userDataDir: app.getPath('userData') });
+  appSettings = new AppSettings({ userDataDir: app.getPath('userData') });
   inboundNodeServer = new InboundNodeServer({ tncManager, bbsFacade, nexDigiClient, terminalSettings, inboundServerSettings });
   updateChecker = new UpdateChecker({ currentVersion: app.getVersion() });
 
@@ -133,6 +136,20 @@ app.whenReady().then(async () => {
   forwardToRenderer('file-transfer-error');
   forwardToRenderer('script-complete');
   forwardToRenderer('script-error');
+
+  // Auto-connect every configured TNC on launch — real packet radio
+  // software behaves this way (plug in and go), rather than making the
+  // user click Connect in TNCs & Radios every time the app starts. Runs
+  // only after every relevant 'error' listener above is already wired
+  // (soundModemManager's especially — an EventEmitter's 'error' with zero
+  // listeners crashes the whole process, the same class of bug already
+  // fixed for PatManager/TncManager itself). Best-effort: one TNC failing
+  // to connect (radio unplugged, wrong port, etc.) doesn't block the rest,
+  // and just leaves that TNC showing its real error status in the UI,
+  // same as a manual Connect click would.
+  for (const t of tncManager.listTncs()) {
+    tncManager.connectTnc(t.id).catch((e) => console.error(`Auto-connect failed for TNC "${t.name}":`, e.message));
+  }
 
   ipcMain.handle('serial:list', async () => {
     try {
@@ -265,6 +282,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('terminal:saveSettings', (_e, settings) => terminalSettings.saveSettings(settings));
   ipcMain.handle('inboundServer:getSettings', () => inboundServerSettings.getSettings());
   ipcMain.handle('inboundServer:saveSettings', (_e, settings) => inboundServerSettings.saveSettings(settings));
+  ipcMain.handle('app:getSettings', () => appSettings.getSettings());
+  ipcMain.handle('app:saveSettings', (_e, settings) => appSettings.saveSettings(settings));
 
   ipcMain.handle('update:check', () => updateChecker.checkForUpdate());
   ipcMain.handle('shell:openExternal', (_e, url) => shell.openExternal(url));

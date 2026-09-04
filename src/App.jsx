@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Box, Drawer, List, ListItemButton, ListItemIcon, Tooltip, Typography, Divider } from '@mui/material';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import RouterIcon from '@mui/icons-material/Router';
@@ -18,9 +18,8 @@ const RAIL_WIDTH = 76;
 
 const NAV_ITEMS = [
   { key: 'terminal', label: 'Terminal', icon: <TerminalIcon /> },
-  { key: 'tncs', label: 'TNCs & Radios', icon: <RouterIcon /> },
   { key: 'winlink', label: 'Winlink', icon: <MailIcon /> },
-  { key: 'chat', label: 'Chat', icon: <ChatIcon /> },
+  { key: 'chat', label: 'NexChat', icon: <ChatIcon /> },
   { key: 'aprs', label: 'APRS', icon: <MapIcon /> }
 ];
 
@@ -28,6 +27,16 @@ export default function App() {
   const [page, setPage] = useState('terminal');
   const [settingsTab, setSettingsTab] = useState('terminal');
   const { tncs, refresh } = useTncs();
+
+  // Starts on Terminal, then switches to the user's configured default
+  // page (Settings → General) once it's loaded — a brief flash of Terminal
+  // is an acceptable tradeoff against holding up the whole app's first
+  // render on a settings-file read.
+  useEffect(() => {
+    window.nexdigi.appGetSettings().then((s) => {
+      if (s.defaultPage && s.defaultPage !== 'terminal') setPage(s.defaultPage);
+    });
+  }, []);
 
   // Each workspace's own settings icon calls this to jump straight to its
   // tab in the unified Settings screen, instead of opening its own dialog.
@@ -67,6 +76,19 @@ export default function App() {
         </List>
         <Box sx={{ flexGrow: 1 }} />
         <List sx={{ width: '100%' }}>
+          <Tooltip title="TNCs & Radios" placement="right">
+            <span>
+              <ListItemButton
+                selected={page === 'tncs'}
+                onClick={() => setPage('tncs')}
+                sx={{ flexDirection: 'column', py: 1.5, mx: 1, borderRadius: 2, mb: 0.5 }}
+              >
+                <ListItemIcon sx={{ minWidth: 0, color: page === 'tncs' ? 'primary.main' : 'text.secondary' }}>
+                  <RouterIcon />
+                </ListItemIcon>
+              </ListItemButton>
+            </span>
+          </Tooltip>
           <Tooltip title="Settings" placement="right">
             <span>
               <ListItemButton

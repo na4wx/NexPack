@@ -126,6 +126,8 @@ contextBridge.exposeInMainWorld('nexdigi', {
   terminalSaveSettings: (settings) => ipcRenderer.invoke('terminal:saveSettings', settings),
   inboundServerGetSettings: () => ipcRenderer.invoke('inboundServer:getSettings'),
   inboundServerSaveSettings: (settings) => ipcRenderer.invoke('inboundServer:saveSettings', settings),
+  appGetSettings: () => ipcRenderer.invoke('app:getSettings'),
+  appSaveSettings: (settings) => ipcRenderer.invoke('app:saveSettings', settings),
 
   checkForUpdate: () => ipcRenderer.invoke('update:check'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),

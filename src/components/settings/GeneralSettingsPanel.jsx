@@ -1,11 +1,38 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Stack, Typography, Button, Alert, CircularProgress } from '@mui/material';
+import { Box, Stack, Typography, Button, Alert, CircularProgress, TextField, MenuItem, Divider } from '@mui/material';
 
-export default function AboutSettingsPanel() {
+const DEFAULT_PAGE_OPTIONS = [
+  { value: 'terminal', label: 'Terminal' },
+  { value: 'winlink', label: 'Winlink' },
+  { value: 'chat', label: 'NexChat' },
+  { value: 'aprs', label: 'APRS' },
+  { value: 'tncs', label: 'TNCs & Radios' }
+];
+
+// App-wide settings — things that apply to NexPack as a whole rather than
+// to any one workspace. Currently just where to land at launch; app
+// version/update info (previously its own "About" tab) lives here too,
+// since that's app-wide as well.
+export default function GeneralSettingsPanel() {
+  const [defaultPage, setDefaultPage] = useState('terminal');
+  const [saved, setSaved] = useState(false);
+
   const [version, setVersion] = useState(null);
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    window.nexdigi.appGetSettings().then((s) => setDefaultPage(s.defaultPage || 'terminal'));
+    window.nexdigi.checkForUpdate().then((r) => setVersion(r.currentVersion)).catch(() => {});
+  }, []);
+
+  const saveDefaultPage = async (value) => {
+    setDefaultPage(value);
+    await window.nexdigi.appSaveSettings({ defaultPage: value });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
 
   const check = async () => {
     setChecking(true);
@@ -21,14 +48,15 @@ export default function AboutSettingsPanel() {
     }
   };
 
-  // Show the current version right away without waiting on a network
-  // round-trip — the check itself still runs manually via the button.
-  useEffect(() => {
-    window.nexdigi.checkForUpdate().then((r) => setVersion(r.currentVersion)).catch(() => {});
-  }, []);
-
   return (
     <Stack spacing={2} sx={{ maxWidth: 480 }}>
+      <Typography variant="subtitle1">Startup</Typography>
+      <TextField select label="Open on launch" value={defaultPage} onChange={(e) => saveDefaultPage(e.target.value)}>
+        {DEFAULT_PAGE_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+      </TextField>
+      {saved && <Typography variant="body2" color="success.main">Saved</Typography>}
+
+      <Divider />
       <Typography variant="subtitle1">About NexPack</Typography>
       <Typography variant="body2" color="text.secondary">
         {version ? `Version ${version}` : 'NexPack'}

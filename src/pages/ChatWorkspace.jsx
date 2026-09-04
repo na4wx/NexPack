@@ -161,9 +161,9 @@ export default function ChatWorkspace({ onOpenSettings }) {
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6" sx={{ mb: 1 }}>Connect to a NexDigi server</Typography>
         <Typography color="text.secondary" sx={{ mb: 2 }}>
-          Chat runs on your NexDigi digipeater — add its address and password to join rooms.
+          NexChat runs on your NexDigi digipeater — add its address and password to join rooms.
         </Typography>
-        <Button variant="contained" onClick={() => onOpenSettings('chat')}>Chat settings</Button>
+        <Button variant="contained" onClick={() => onOpenSettings('chat')}>NexChat settings</Button>
       </Box>
     );
   }

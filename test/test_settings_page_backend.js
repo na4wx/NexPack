@@ -39,6 +39,20 @@ async function main() {
     assert.strictEqual(s.defaultDigiPath, 'WIDE1-1,WIDE2-1');
   });
 
+  await test('AppSettings defaults to "terminal" as the launch page before anything is saved', async () => {
+    const AppSettings = require('../electron/main/settings/AppSettings');
+    const as = new AppSettings({ userDataDir: dir });
+    assert.strictEqual(as.getSettings().defaultPage, 'terminal');
+  });
+
+  await test('AppSettings persists the chosen default launch page across instances', async () => {
+    const AppSettings = require('../electron/main/settings/AppSettings');
+    const as = new AppSettings({ userDataDir: dir });
+    as.saveSettings({ defaultPage: 'aprs' });
+    const reloaded = new AppSettings({ userDataDir: dir });
+    assert.strictEqual(reloaded.getSettings().defaultPage, 'aprs');
+  });
+
   await test('BBS and Chat callsigns are independent, but saving one does not wipe the other', async () => {
     const client = new NexDigiClient({ userDataDir: dir });
     client.saveSettings({ host: 'localhost:3010', password: 'secret', callsign: 'N0CALL' });

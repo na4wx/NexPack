@@ -4,14 +4,14 @@ import TerminalSettingsPanel from '../components/settings/TerminalSettingsPanel'
 import WinlinkSettingsPanel from '../components/settings/WinlinkSettingsPanel';
 import ChatSettingsPanel from '../components/settings/ChatSettingsPanel';
 import AprsSettingsPanel from '../components/settings/AprsSettingsPanel';
-import AboutSettingsPanel from '../components/settings/AboutSettingsPanel';
+import GeneralSettingsPanel from '../components/settings/GeneralSettingsPanel';
 
 const TABS = [
   { key: 'terminal', label: 'Terminal' },
   { key: 'winlink', label: 'Winlink' },
-  { key: 'chat', label: 'Chat' },
+  { key: 'chat', label: 'NexChat' },
   { key: 'aprs', label: 'APRS' },
-  { key: 'about', label: 'About' }
+  { key: 'general', label: 'General' }
 ];
 
 export default function SettingsPage({ tncs, initialTab }) {
@@ -32,7 +32,7 @@ export default function SettingsPage({ tncs, initialTab }) {
         {tab === 'winlink' && <WinlinkSettingsPanel tncs={tncs} />}
         {tab === 'chat' && <ChatSettingsPanel tncs={tncs} />}
         {tab === 'aprs' && <AprsSettingsPanel tncs={tncs} />}
-        {tab === 'about' && <AboutSettingsPanel />}
+        {tab === 'general' && <GeneralSettingsPanel />}
       </Box>
     </Box>
   );
