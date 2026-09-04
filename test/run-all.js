@@ -25,6 +25,7 @@ const files = [
   'test_winlink_rf_radio.js',
   'test_winlink_forms.js',
   'test_agwpe_bridge.js',
+  'test_winlink_prompt_hang.js',
   'test_aprs_parser.js',
   'test_aprs_manager_rf.js',
   'test_aprs_manager_tx.js',

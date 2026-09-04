@@ -304,10 +304,71 @@ class PatManager extends EventEmitter {
     throw new Error('pat did not start listening in time');
   }
 
+  // pat's own bundled web GUI answers these over the same /ws socket
+  // (confirmed reading pat's real source: api/wshub.go's Prompt()/
+  // handleWSMessage(), api/types/prompt.go) — {"Prompt":{id,kind,message,
+  // options}} in, {"prompt_response":{id,value,error}} back. NexPack's own
+  // UI never speaks this protocol at all, so any real Prompt pat sends
+  // (found live: PromptKindPreAccountActivation — connect.go calls
+  // promptUnconfirmedAccount() at the very START of EVERY connect, before
+  // ever touching a transport, whenever cmsapi.AccountExists() can't
+  // confirm the configured mycall/SSID — e.g. a brand-new SSID given to
+  // Winlink RF specifically, exactly what this app's own Settings page
+  // recommends doing) previously sat forever unanswered: pat blocks on
+  // a.promptHub.Prompt() with no timeout of its own for that kind, so the
+  // ENTIRE connect just hung in total silence — zero AGWPE traffic, zero
+  // SABM, nothing — until PatManager's own 60s backstop fired. Reproduced
+  // directly against the real bundled pat binary: a fresh, never-before-
+  // used SSID hung indefinitely with zero bridge activity; a
+  // previously-confirmed callsign connected immediately. Auto-answering
+  // every kind here (with a real, sensible default) turns that whole class
+  // of silent hang into either an immediate real connect or a clearly
+  // logged decision, for any prompt kind pat might ever send this way.
+  _respondPrompt(id, value) {
+    try { this.ws.send(JSON.stringify({ prompt_response: { id, value, error: null } })); } catch (e) { /* socket gone — connect will time out normally */ }
+  }
+
+  _handlePrompt(prompt) {
+    const { id, kind, message } = prompt;
+    let value;
+    switch (kind) {
+      case 'pre-account-activation':
+        // "Can't confirm this Winlink account is active — start an
+        // over-the-air activation?" — yes: that's the whole point of
+        // connecting with a new callsign/SSID in the first place.
+        value = 'confirmed';
+        break;
+      case 'account-activation':
+        // A real "your new account is active" message just arrived —
+        // accept it (as opposed to deferring it for later download).
+        value = 'accept';
+        break;
+      case 'busy-channel':
+        // Belt-and-suspenders alongside --ignore-busy below (in case a
+        // future pat version routes this differently) — anything but
+        // "abort" lets it proceed.
+        value = 'continue';
+        break;
+      case 'password':
+        // Already written into config.json's secure_login_password by
+        // saveSettings() — if pat is asking anyway, that field must be
+        // empty, so there's nothing real to answer with.
+        value = '';
+        break;
+      default:
+        value = '';
+    }
+    this.emit('log', `pat asked: ${kind} — ${message} (auto-answered: ${value || '(empty)'})\n`);
+    this._respondPrompt(id, value);
+  }
+
   _connectSocket() {
     this.ws = new WebSocket(`ws://127.0.0.1:${this.port}/ws`);
     this.ws.on('message', (data) => {
-      try { this.emit('status', JSON.parse(data.toString())); } catch (e) { /* ignore non-JSON frames */ }
+      let parsed;
+      try { parsed = JSON.parse(data.toString()); } catch (e) { return; /* ignore non-JSON frames */ }
+      if (parsed.Prompt) { this._handlePrompt(parsed.Prompt); return; }
+      this.emit('status', parsed);
     });
     this.ws.on('error', () => { /* status feed is best-effort */ });
   }
