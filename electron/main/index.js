@@ -112,7 +112,15 @@ app.whenReady().then(async () => {
   // UI alone.
   agwpeBridgeServer.on('log', (line) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', line); });
 
-  soundModemManager.on('log', (payload) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('soundmodem-log', payload); });
+  // Also printed to the main-process console (visible in the terminal when
+  // running from source) since nothing in the renderer currently subscribes
+  // to 'soundmodem-log' for the tncId:null diagnostic lines (e.g. the
+  // Windows audio-device probe's own errors) — without this they were only
+  // ever sent into the void.
+  soundModemManager.on('log', (payload) => {
+    if (payload.tncId === null) console.log('[soundmodem]', payload.line.trim());
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('soundmodem-log', payload);
+  });
   // A direwolf crash after startup has no other listener to catch it —
   // same 'error'-with-zero-listeners crash class documented above for pat.
   soundModemManager.on('error', ({ tncId, error }) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('soundmodem-log', { tncId, line: `ERROR: ${error.message}\n` }); });

@@ -368,26 +368,55 @@ for ($i = 0; $i -lt [NexPackWinMM]::waveInGetNumDevs(); $i++) {
 }
 `.trim();
 
-    const output = await new Promise((resolve) => {
-      let buf = '';
-      const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
-      const done = (() => { let called = false; return () => { if (called) return; called = true; try { proc.kill('SIGKILL'); } catch (e) { /* ignore */ } resolve(buf); }; })();
-      proc.stdout.on('data', (d) => { buf += d.toString(); });
-      proc.on('error', () => done());
-      proc.on('exit', () => done());
-      setTimeout(done, 8000);
-      try { proc.stdin.write(script); proc.stdin.end(); } catch (e) { done(); }
+    // Written to a real .ps1 file and run with -File rather than piped in
+    // via "-Command -": piping worked fine testing interactively, but a
+    // spawned child process's stdin pipe under Electron's packaged runtime
+    // is a much less battle-tested path than "run this script file", and a
+    // real file lets -ExecutionPolicy Bypass apply the way it's documented
+    // to (per-invocation, no system policy change needed) instead of
+    // relying on -Command's stdin-execution semantics, which found to be
+    // fragile in a real report: it silently produced zero output with no
+    // error, in a way plain -File either resolves or gives a diagnosable
+    // stderr for instead.
+    const scriptPath = path.join(this.dataDir, '_winmm_probe.ps1');
+    fs.writeFileSync(scriptPath, script);
+
+    const { stdout, stderr, code, err } = await new Promise((resolve) => {
+      let out = '';
+      let errBuf = '';
+      let proc;
+      try {
+        proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) {
+        resolve({ stdout: '', stderr: '', code: null, err: e });
+        return;
+      }
+      const done = (code) => { if (done.called) return; done.called = true; try { proc.kill('SIGKILL'); } catch (e) { /* ignore */ } resolve({ stdout: out, stderr: errBuf, code, err: null }); };
+      proc.stdout.on('data', (d) => { out += d.toString(); });
+      proc.stderr.on('data', (d) => { errBuf += d.toString(); });
+      proc.on('error', (e) => resolve({ stdout: out, stderr: errBuf, code: null, err: e }));
+      proc.on('exit', (code) => done(code));
+      setTimeout(() => done(null), 8000);
     });
+
+    try { fs.unlinkSync(scriptPath); } catch (e) { /* ignore */ }
+
+    if (err || stderr.trim()) {
+      this.emit('log', { tncId: null, line: `Windows audio device probe failed: ${err ? err.message : stderr.trim()}\n` });
+    }
 
     const outputs = [];
     const inputs = [];
     let section = null;
-    for (const line of output.split(/\r?\n/)) {
+    for (const line of stdout.split(/\r?\n/)) {
       const t = line.trim();
       if (t === 'OUT:') { section = outputs; continue; }
       if (t === 'IN:') { section = inputs; continue; }
       const m = /^\[(\d+)\]\s*(.+)$/.exec(t);
       if (m && section) section.push({ name: m[2].trim(), isDefault: Number(m[1]) === 0 });
+    }
+    if (inputs.length === 0 && outputs.length === 0 && !err && !stderr.trim()) {
+      this.emit('log', { tncId: null, line: `Windows audio device probe returned no devices (exit code ${code}). Raw output:\n${stdout}\n` });
     }
     return { inputs, outputs };
   }
