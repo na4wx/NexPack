@@ -120,6 +120,29 @@ class AgwpeBridgeServer extends EventEmitter {
     this.socketSessions.clear();
   }
 
+  // Forcibly aborts every in-flight connect attempt and connected session,
+  // and severs pat's underlying TCP connection to this bridge. Reported
+  // live: hitting Disconnect while Winlink was still connecting didn't
+  // actually stop it. Root cause is the SAME confirmed pat bug documented
+  // in PatManager.js's CONNECT_TIMEOUT_MS comment — pat's AGWPE client
+  // doesn't reliably react to an application-level 'd' disconnect while
+  // it's actively dialing, so asking nicely (the normal per-session
+  // disconnect path) isn't enough here. A closed TCP socket is something
+  // pat's own read loop can't ignore the way it apparently can an AGWPE
+  // frame, and ending the real AX.25 session directly stops the actual
+  // real-world harm (the radio retrying) regardless of whether pat's own
+  // HTTP call ever notices.
+  cancelAll() {
+    for (const sessionId of Array.from(this.sessions.keys())) {
+      try { this.tncManager.endSession(sessionId); } catch (e) { /* ignore */ }
+      this.sessions.delete(sessionId);
+    }
+    for (const socket of Array.from(this.socketSessions.keys())) {
+      try { socket.destroy(); } catch (e) { /* ignore */ }
+    }
+    this.socketSessions.clear();
+  }
+
   _handleSocket(socket) {
     let buf = Buffer.alloc(0);
     this.socketSessions.set(socket, new Set());
@@ -211,6 +234,10 @@ class AgwpeBridgeServer extends EventEmitter {
     }
     try {
       await this._ensureRadioConnected(radio.tncId);
+      // cancelAll() may have destroyed this socket while the radio was
+      // still coming up — don't start a real AX.25 session for a connect
+      // attempt the user already cancelled.
+      if (socket.destroyed) return;
       const snap = this.tncManager.startSession(radio.tncId, radio.radioId, callTo);
       const entry = { socket, callFrom: callFrom.toUpperCase(), callTo: callTo.toUpperCase(), port, sessionId: snap.id };
       this.sessions.set(snap.id, entry);

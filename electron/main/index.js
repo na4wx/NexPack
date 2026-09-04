@@ -195,7 +195,15 @@ app.whenReady().then(async () => {
   ipcMain.handle('winlink:setConnectAlias', (_e, name, url) => patManager.setConnectAlias(name, url));
   ipcMain.handle('winlink:removeConnectAlias', (_e, name) => patManager.removeConnectAlias(name));
   ipcMain.handle('winlink:connect', (_e, url) => patManager.connect(url));
-  ipcMain.handle('winlink:disconnect', (_e, dirty) => patManager.disconnect(dirty));
+  // Also forcibly cancels at the AGWPE bridge layer, not just pat's own
+  // /api/disconnect — pat's AGWPE client has a confirmed bug where it
+  // doesn't reliably react to that while actively dialing (see
+  // PatManager.js's CONNECT_TIMEOUT_MS comment), which is exactly what
+  // made "click Disconnect while it's still connecting" not actually work.
+  ipcMain.handle('winlink:disconnect', async (_e, dirty) => {
+    agwpeBridgeServer.cancelAll();
+    return patManager.disconnect(dirty);
+  });
   ipcMain.handle('winlink:searchRms', (_e, params) => patManager.searchRms(params));
 
   // BBS (via NexDigi server REST, or over RF — routed by BbsFacade based on the active transport)

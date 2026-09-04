@@ -253,6 +253,66 @@ async function main() {
     bridge2.stop();
   });
 
+  await test('cancelAll() ends a real, already-connected AX.25 session (not just a pat-facing no-op)', async () => {
+    // Reported live: clicking Disconnect while Winlink was still connecting
+    // didn't actually stop it — the same confirmed pat bug (it doesn't
+    // reliably react to a graceful application-level disconnect while
+    // actively dialing) that motivated the shorter connect timeout. This
+    // is why cancelAll() has to reach all the way into TncManager and end
+    // the real session, not just notify pat and hope.
+    const mgrF = new TncManager({});
+    const tncF = mgrF.createTnc({ name: 'F', type: 'kiss-tcp', connection: { host: '127.0.0.1', port: bridgePort } });
+    const radioF = mgrF.addRadio(tncF.id, { callsign: 'NA4WX-14', name: 'Winlink', portNumber: 0 });
+    const bridgeF = new AgwpeBridgeServer({ tncManager: mgrF, getRadio: () => ({ tncId: tncF.id, radioId: radioF.id }) });
+    const bridgeFPort = await bridgeF.start();
+
+    const mgrBStates = [];
+    mgrB.on('session-state', (s) => mgrBStates.push(s));
+
+    const clientF = new TestAgwClient(bridgeFPort);
+    await clientF.connect();
+    clientF.send({ kind: 'X', callFrom: 'NA4WX-14' });
+    await clientF.waitFor((f) => f.kind === 'X');
+    clientF.send({ kind: 'C', callFrom: 'NA4WX-14', callTo: 'WB4GBI-10' });
+    await clientF.waitFor((f) => f.kind === 'C', 5000); // really connected first
+
+    let socketClosed = false;
+    clientF.sock.on('close', () => { socketClosed = true; });
+    bridgeF.cancelAll();
+    await wait(300);
+
+    assert.strictEqual(bridgeF.sessions.size, 0, 'the bridge should have no sessions left after cancelAll()');
+    assert.ok(socketClosed, "pat's socket to the bridge should be forcibly closed");
+    const remoteDisconnected = mgrBStates.some((s) => s.remoteCall === 'NA4WX-14' && s.state === 'disconnected');
+    assert.ok(remoteDisconnected, 'the real remote station should see the AX.25 session actually end, not just pat losing interest');
+
+    bridgeF.stop();
+    mgrF.shutdown();
+  });
+
+  await test('cancelAll() issued while still connecting (radio not up yet) prevents the session from ever starting', async () => {
+    const mgrG = new TncManager({});
+    const deadPort = 2; // nothing listening — connectTnc() will error, but slowly enough to cancel first
+    const tncG = mgrG.createTnc({ name: 'G', type: 'kiss-tcp', connection: { host: '127.0.0.1', port: deadPort } });
+    const radioG = mgrG.addRadio(tncG.id, { callsign: 'NA4WX-15', name: 'Winlink', portNumber: 0 });
+    const bridgeG = new AgwpeBridgeServer({ tncManager: mgrG, getRadio: () => ({ tncId: tncG.id, radioId: radioG.id }) });
+    const bridgeGPort = await bridgeG.start();
+
+    const clientG = new TestAgwClient(bridgeGPort);
+    await clientG.connect();
+    clientG.send({ kind: 'X', callFrom: 'NA4WX-15' });
+    await clientG.waitFor((f) => f.kind === 'X');
+    clientG.send({ kind: 'C', callFrom: 'NA4WX-15', callTo: 'WB4GBI-10' });
+    bridgeG.cancelAll(); // cancel immediately, before the radio has had any chance to connect or error
+
+    await wait(500);
+    assert.strictEqual(bridgeG.sessions.size, 0, 'no session should exist — the connect attempt was cancelled before it could start one');
+    assert.ok(!clientG.frames.some((f) => f.kind === 'C'), 'should never have reported CONNECTED for a cancelled attempt');
+
+    bridgeG.stop();
+    mgrG.shutdown();
+  });
+
   console.log(`\nTests passed: ${pass}`);
   console.log(`Tests failed: ${fail}`);
 
