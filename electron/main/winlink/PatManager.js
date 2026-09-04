@@ -5,7 +5,22 @@ const http = require('http');
 const EventEmitter = require('events');
 const WebSocket = require('ws');
 
-const CONNECT_TIMEOUT_MS = 120000;
+// pat's own AGWPE client has a confirmed real bug (matches la5nta/pat#405,
+// still open upstream as of pat v1.0.0, the latest release): once it's past
+// the initial registration handshake and into an active "connecting" state,
+// it does not react to an asynchronous disconnect notification from the
+// AGWPE server AT ALL — verified directly against the real bundled pat
+// binary: a real AgwpeBridgeServer that correctly gives up and sends a
+// clean 'd' disconnect ~36s after nobody answers a SABM (5 retries at 6s
+// each, TncManager's own real, tested give-up behavior) got pat's HTTP
+// /api/connect to hang well past 90s anyway, with nothing further ever
+// logged past "Connecting to <call>...". pat will NEVER self-resolve that
+// case — this timeout is the only backstop, so it's kept well above
+// TncManager's own worst-case AX.25-layer give-up (~36s) so a real,
+// eventually-successful connect still has room, but far below the old
+// 120s so a genuine no-answer case doesn't cost the user two full minutes
+// waiting on a session pat itself has already effectively abandoned.
+const CONNECT_TIMEOUT_MS = 60000;
 
 // Manages a bundled `pat` (github.com/la5nta/pat, GPL-3.0) subprocess as
 // NexPack's real Winlink client. Real B2F (proposal exchange, LZHUF
