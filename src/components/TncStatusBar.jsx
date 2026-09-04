@@ -3,12 +3,15 @@ import { Box, Stack, Tooltip, Typography } from '@mui/material';
 
 const PULSE_MS = 250;
 const LIGHTS = [
-  { key: 'tx', color: '#ff5252', label: 'TX — transmitting' },
-  { key: 'rx', color: '#4caf50', label: 'RX — channel activity heard' },
-  { key: 'dec', color: '#2196f3', label: 'DEC — decoded a valid packet' }
+  { key: 'tx', mutedColor: '#5c2323', brightColor: '#ff1a1a', label: 'TX — transmitting' },
+  { key: 'rx', mutedColor: '#1f4a26', brightColor: '#00e676', label: 'RX — channel activity heard' },
+  { key: 'dec', mutedColor: '#5c531f', brightColor: '#ffea00', label: 'DEC — decoded a valid packet' }
 ];
 
-function Light({ color, active, label }) {
+// Always shows its color (muted when idle, bright when active) instead of
+// going fully grey — a real TNC's panel LEDs are colored whether lit or
+// not, so an idle light still tells you at a glance which is which.
+function Light({ mutedColor, brightColor, active, label }) {
   return (
     <Tooltip title={label} placement="top">
       <Box
@@ -16,8 +19,8 @@ function Light({ color, active, label }) {
           width: 8,
           height: 8,
           borderRadius: '50%',
-          bgcolor: active ? color : 'action.disabledBackground',
-          boxShadow: active ? `0 0 4px ${color}` : 'none',
+          bgcolor: active ? brightColor : mutedColor,
+          boxShadow: active ? `0 0 4px ${brightColor}` : 'none',
           transition: 'background-color 80ms linear, box-shadow 80ms linear'
         }}
       />
@@ -67,7 +70,7 @@ export default function TncStatusBar({ tncs }) {
             <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
               {t.name}
             </Typography>
-            {LIGHTS.map((l) => <Light key={l.key} color={l.color} active={!!p[l.key]} label={l.label} />)}
+            {LIGHTS.map((l) => <Light key={l.key} mutedColor={l.mutedColor} brightColor={l.brightColor} active={!!p[l.key]} label={l.label} />)}
           </Stack>
         );
       })}
