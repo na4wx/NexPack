@@ -54,8 +54,7 @@ export default function App() {
   const openSettings = (tab) => { setSettingsTab(tab); setPage('settings'); };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden' }}>
-    <Box sx={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
+    <Box sx={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
       <Drawer
         variant="permanent"
         sx={{
@@ -118,6 +117,7 @@ export default function App() {
       </Drawer>
 
       <Box sx={{ flexGrow: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {/* The four live workspaces stay mounted at all times and are only
             hidden via CSS — switching nav tabs used to unmount whichever
             page you left, which threw away everything held in that page's
@@ -143,8 +143,8 @@ export default function App() {
         {page === 'tncs' && <TncManagerPage tncs={tncs} onChange={refresh} />}
         {page === 'settings' && <SettingsPage tncs={tncs} initialTab={settingsTab} />}
       </Box>
-    </Box>
-    {showTncStatusBar && <TncStatusBar tncs={tncs} />}
+      {showTncStatusBar && <TncStatusBar tncs={tncs} />}
+      </Box>
     </Box>
   );
 }
