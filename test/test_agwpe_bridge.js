@@ -142,6 +142,13 @@ async function main() {
     client.send({ kind: 'C', callFrom: 'NA4WX-10', callTo: 'WB4GBI-10' });
     const reply = await client.waitFor((f) => f.kind === 'C', 5000);
     assert.ok(/CONNECTED/i.test(reply.payload.toString('ascii')), `expected a CONNECTED message, got: ${reply.payload.toString('ascii')}`);
+    // Real bug, found live against the actual pat binary: pat's own AGWPE
+    // client (wl2k-go's agwpe/conn.go connect()) requires this EXACT
+    // prefix on the ack — anything else (this bridge previously sent
+    // "*** CONNECTED To Station ") is treated as "connect precondition
+    // failed" and pat immediately disconnects, even though the real
+    // on-air connect genuinely succeeded.
+    assert.ok(reply.payload.toString('ascii').startsWith('*** CONNECTED With '), `pat requires the exact "*** CONNECTED With " prefix, got: ${reply.payload.toString('ascii')}`);
   });
 
   await test('D (send connected data) reaches the real remote station and its reply comes back as a D frame', async () => {

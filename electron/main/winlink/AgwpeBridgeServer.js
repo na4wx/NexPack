@@ -71,7 +71,20 @@ class AgwpeBridgeServer extends EventEmitter {
       const entry = this.sessions.get(snap.id);
       if (!entry) return;
       if (snap.state === 'connected') {
-        const text = `*** CONNECTED To Station ${entry.callTo}\r`;
+        // Must start with exactly "*** CONNECTED With " — confirmed
+        // reading pat's own AGWPE client source (wl2k-go's
+        // transport/ax25/agwpe/conn.go connect()): it checks
+        // bytes.HasPrefix(f.Data, []byte("*** CONNECTED With ")) on the
+        // very first 'C' frame it gets back and treats ANYTHING else,
+        // including a real successful connect acked with different
+        // wording (this bridge previously sent "*** CONNECTED To Station "
+        // — a real, on-air connect that DID succeed), as a hard
+        // "connect precondition failed" and immediately disconnects.
+        // Found live: pat's own log showed "AGWPE TNC initialized",
+        // "Connecting to...", a real SABM/UA exchange completing (radio
+        // keyed, remote responded) — then an instant, wrong failure right
+        // after this ack was sent with the old wording.
+        const text = `*** CONNECTED With ${entry.callTo}\r`;
         entry.socket.write(buildFrame({ port: entry.port, kind: 'C', callFrom: entry.callFrom, callTo: entry.callTo, payload: Buffer.from(text, 'ascii') }));
       } else if (snap.state === 'disconnected') {
         this._sendDisconnect(entry, `*** DISCONNECTED From Station ${entry.callTo}\r`);
