@@ -15,12 +15,22 @@ const WebSocket = require('ws');
 // each, TncManager's own real, tested give-up behavior) got pat's HTTP
 // /api/connect to hang well past 90s anyway, with nothing further ever
 // logged past "Connecting to <call>...". pat will NEVER self-resolve that
-// case — this timeout is the only backstop, so it's kept well above
-// TncManager's own worst-case AX.25-layer give-up (~36s) so a real,
-// eventually-successful connect still has room, but far below the old
-// 120s so a genuine no-answer case doesn't cost the user two full minutes
-// waiting on a session pat itself has already effectively abandoned.
-const CONNECT_TIMEOUT_MS = 60000;
+// case — this timeout is the only backstop.
+//
+// Originally kept low (60s) as the only guard against that hang. Since
+// then, the two REAL causes of a stuck-forever connect were found and
+// fixed (an unanswered pat account-activation prompt, and the bridge
+// sending the wrong AGWPE "CONNECTED" ack text) — both made the link never
+// even establish. Once the AX.25 link genuinely connects, though,
+// /api/connect keeps blocking for the ENTIRE B2F session, not just the
+// initial handshake — confirmed live on real RF: SABM/UA in ~2s, a real
+// CMS banner and B2F proposal exchange, an in-flight I-frame retrying
+// every ~10s (normal AX.25 T1 behavior on real, marginal RF) that was
+// STILL making progress (the remote's own N(R) had just advanced) when the
+// old 60s cutoff killed an otherwise working session. A real over-the-air
+// exchange can legitimately take a few minutes, so this now only needs to
+// guard against a genuinely stuck session, not a live one.
+const CONNECT_TIMEOUT_MS = 300000;
 
 // Manages a bundled `pat` (github.com/la5nta/pat, GPL-3.0) subprocess as
 // NexPack's real Winlink client. Real B2F (proposal exchange, LZHUF
