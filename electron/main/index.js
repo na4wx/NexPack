@@ -104,6 +104,12 @@ app.whenReady().then(async () => {
   // entire Electron process — Node throws when 'error' has no listeners.
   patManager.on('error', (err) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', `ERROR: ${err.message}\n`); });
 
+  // TncManager's own AGWPE-native session-matching trace (which callsigns
+  // it's comparing, whether it found an existing session or had to treat a
+  // 'C' notification as unsolicited) — into the same Winlink log view,
+  // since this is squarely a Winlink RF diagnosis tool right now.
+  tncManager.on('agwpe-debug', (line) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('winlink-log', `[TncManager] ${line}\n`); });
+
   // Surfaces the bridge's own diagnostic trace (which AGWPE frames it gets
   // from pat, which radio it resolves, connect/failure outcomes) into the
   // same Winlink log view pat's own stdout already goes to — previously

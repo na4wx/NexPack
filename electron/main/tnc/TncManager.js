@@ -526,10 +526,11 @@ class TncManager extends EventEmitter {
 
   _handleAgwpeSessionConnected(t, { callFrom, callTo }) {
     const radio = this._findRadioForAgwpeEvent(t, callFrom);
-    if (!radio) return;
+    if (!radio) { this.emit('agwpe-debug', `session-connected: no radio matches callFrom="${callFrom}" on TNC ${t.config.id} (configured radios: ${t.config.radios.map((r) => r.callsign).join(', ')})`); return; }
     const remoteCall = callTo.toUpperCase();
     const sessionKey = `${t.config.id}:${radio.id}:${remoteCall}`;
     let session = this.sessions.get(sessionKey);
+    this.emit('agwpe-debug', `session-connected: callFrom="${callFrom}" callTo="${callTo}" -> key="${sessionKey}" (${session ? 'found existing session ' + session.id + ', state=' + session.state : 'NO EXISTING SESSION — creating one as unsolicited'})`);
     if (session && session.state === 'connected') return; // redundant notice
     if (!session) session = this._newSession(t, radio, remoteCall, sessionKey); // unsolicited inbound connect
     session.viaAgwpeNative = true;
@@ -842,6 +843,7 @@ class TncManager extends EventEmitter {
       // isn't implemented, matching this app's Winlink RF use case, which
       // never needs one.
       session.viaAgwpeNative = true;
+      this.emit('agwpe-debug', `startSession: sending 'C' for callFrom="${radio.callsign}" callTo="${remoteCall}" -> key="${sessionKey}"`);
       t.adapter.connectSession(radio.portNumber || 0, radio.callsign, remoteCall);
       // Some AGWPE servers may never send anything back at all for a
       // station that never answers — this is the same backstop role
