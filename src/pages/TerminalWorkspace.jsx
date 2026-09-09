@@ -79,7 +79,26 @@ export default function TerminalWorkspace({ tncs, onOpenSettings }) {
       });
     });
     const offData = window.nexdigi.onSessionData(({ sessionId, text }) => {
-      setTranscripts((prev) => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { dir: 'rx', text: normalizeLineEndings(text) }] }));
+      // Each 'session-data' event is one AX.25 I-frame's worth of bytes, not
+      // a real line — a remote's own packet-size limit routinely splits a
+      // single line of output across several I-frames (confirmed live:
+      // "TNCHAT-----T" / "ENNESSEE CHAT" — a plain, real node menu split
+      // mid-word by a 128-byte frame boundary). Rendering every chunk as
+      // its own transcript entry (see SessionPane.jsx, one <Typography>
+      // block per entry) turned every such split into a spurious line
+      // break. Appending onto the previous entry when it's also an
+      // unbroken RX run reconstructs the real, continuous byte stream the
+      // remote actually sent — a preceding TX line (something WE sent)
+      // still correctly starts a fresh entry.
+      setTranscripts((prev) => {
+        const list = prev[sessionId] || [];
+        const last = list[list.length - 1];
+        const chunk = normalizeLineEndings(text);
+        if (last && last.dir === 'rx') {
+          return { ...prev, [sessionId]: [...list.slice(0, -1), { dir: 'rx', text: last.text + chunk }] };
+        }
+        return { ...prev, [sessionId]: [...list, { dir: 'rx', text: chunk }] };
+      });
     });
     const offTx = window.nexdigi.onSessionTx(({ sessionId, text }) => {
       setTranscripts((prev) => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { dir: 'tx', text }] }));
