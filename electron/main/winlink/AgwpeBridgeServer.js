@@ -98,6 +98,7 @@ class AgwpeBridgeServer extends EventEmitter {
     this._onSessionData = ({ sessionId, raw }) => {
       const entry = this.sessions.get(sessionId);
       if (!entry) return;
+      this.emit('log', `AGWPE bridge: got ${raw.length} bytes from the radio for ${entry.callFrom}, relaying to pat\n`);
       entry.socket.write(buildFrame({ port: entry.port, kind: 'D', pid: 0xf0, callFrom: entry.callTo, callTo: entry.callFrom, payload: raw }));
     };
   }
@@ -219,7 +220,17 @@ class AgwpeBridgeServer extends EventEmitter {
       }
       case 'D': { // send connected data
         const found = this._findSessionByPair(callFrom, callTo);
-        if (found) { try { this.tncManager.sendSessionRaw(found.sessionId, payload); } catch (e) { this.emit('log', `AGWPE bridge: send failed: ${e.message}\n`); } }
+        // Logged unconditionally (not just on failure) — a successful send
+        // previously produced zero log output at all, making it impossible
+        // to tell "pat never even tried to send" apart from "it tried and
+        // something downstream swallowed it" when diagnosing a stalled
+        // exchange.
+        if (found) {
+          this.emit('log', `AGWPE bridge: got ${payload.length} bytes of data from pat for ${callFrom} -> ${callTo}, relaying\n`);
+          try { this.tncManager.sendSessionRaw(found.sessionId, payload); } catch (e) { this.emit('log', `AGWPE bridge: send failed: ${e.message}\n`); }
+        } else {
+          this.emit('log', `AGWPE bridge: got a D frame from pat for ${callFrom} -> ${callTo} but no matching session is tracked — dropped\n`);
+        }
         break;
       }
       case 'd': { // disconnect request
