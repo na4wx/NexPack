@@ -882,6 +882,14 @@ class TncManager extends EventEmitter {
       // retries themselves (the server owns SABM retry timing now).
       session.retryTimer = setTimeout(() => {
         if (this.sessions.get(sessionKey) !== session || session.state !== 'connecting') return;
+        // Tell the SERVER to actually stop too — giving up here only tore
+        // down our own tracking and told pat "disconnected"; the AGWPE
+        // server itself has no idea we gave up and, left alone, keeps
+        // blindly retrying the real over-the-air SABM on its own schedule
+        // (confirmed live: 12+ retries spanning well over a minute, long
+        // past this backstop firing, for a station that was never going to
+        // answer).
+        try { t.adapter.disconnectSession(radio.portNumber || 0, radio.callsign, remoteCall); } catch (e) { /* best-effort */ }
         this._giveUp(session, `No response from ${session.remoteCall} after ${Math.round(this.agwpeConnectTimeoutMs / 1000)}s.`);
       }, this.agwpeConnectTimeoutMs);
       return this._sessionSnapshot(session);
