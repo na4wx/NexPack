@@ -524,13 +524,43 @@ class TncManager extends EventEmitter {
     return t.config.radios.find((r) => String(r.callsign || '').toUpperCase() === callFrom.toUpperCase());
   }
 
+  // A real external AGWPE server's own 'C'/'D' notifications aren't
+  // guaranteed to echo the target callsign in EXACTLY the string form this
+  // app sent in its own 'C' request — found live: a session that
+  // demonstrably connected and exchanged real data for 8+ seconds still
+  // hit startSession()'s own "no response" backstop, which is only
+  // possible if the notification's computed lookup key didn't match the
+  // one startSession() used, leaving that original session object stuck
+  // in 'connecting' with its timer still armed while a SEPARATE (wrongly
+  // "unsolicited") session object handled the real exchange. Since the
+  // exact formatting difference can't be verified without the server's own
+  // source (UZ7HO Soundmodem is closed-source), this falls back to
+  // adopting the single other in-flight 'connecting' session on the same
+  // radio when the exact key doesn't match one already tracked — safe
+  // because Winlink RF (and this app generally) never has more than one
+  // outbound connect in flight per radio at a time — and registers an
+  // alias under the server's own reported key so subsequent 'D'/'d'
+  // events for this same session resolve normally from then on.
+  _resolveAgwpeSession(t, radio, exactKey) {
+    let session = this.sessions.get(exactKey);
+    if (session) return session;
+    const pending = Array.from(this.sessions.values()).filter((s) => s.tncId === t.config.id && s.radioId === radio.id && s.state === 'connecting');
+    if (pending.length === 1) {
+      session = pending[0];
+      this.sessions.set(exactKey, session); // alias — future events with this exact key resolve directly
+      if (exactKey !== session.key) session.agwpeAliasKey = exactKey; // so _teardownConnected can remove it too
+      this.emit('agwpe-debug', `resolved "${exactKey}" to the one pending connecting session (${session.id}, originally keyed "${session.key}") instead of treating it as unsolicited — looks like the server echoes the callsign in a different format than this app sent`);
+    }
+    return session || null;
+  }
+
   _handleAgwpeSessionConnected(t, { callFrom, callTo }) {
     const radio = this._findRadioForAgwpeEvent(t, callFrom);
     if (!radio) { this.emit('agwpe-debug', `session-connected: no radio matches callFrom="${callFrom}" on TNC ${t.config.id} (configured radios: ${t.config.radios.map((r) => r.callsign).join(', ')})`); return; }
     const remoteCall = callTo.toUpperCase();
     const sessionKey = `${t.config.id}:${radio.id}:${remoteCall}`;
-    let session = this.sessions.get(sessionKey);
-    this.emit('agwpe-debug', `session-connected: callFrom="${callFrom}" callTo="${callTo}" -> key="${sessionKey}" (${session ? 'found existing session ' + session.id + ', state=' + session.state : 'NO EXISTING SESSION — creating one as unsolicited'})`);
+    let session = this._resolveAgwpeSession(t, radio, sessionKey);
+    this.emit('agwpe-debug', `session-connected: callFrom="${callFrom}" callTo="${callTo}" -> key="${sessionKey}" (${session ? 'resolved to session ' + session.id + ', state=' + session.state : 'NO EXISTING SESSION — creating one as unsolicited'})`);
     if (session && session.state === 'connected') return; // redundant notice
     if (!session) session = this._newSession(t, radio, remoteCall, sessionKey); // unsolicited inbound connect
     session.viaAgwpeNative = true;
@@ -543,7 +573,7 @@ class TncManager extends EventEmitter {
   _handleAgwpeSessionData(t, { callFrom, callTo, payload }) {
     const radio = this._findRadioForAgwpeEvent(t, callFrom);
     if (!radio) return;
-    const session = this.sessions.get(`${t.config.id}:${radio.id}:${callTo.toUpperCase()}`);
+    const session = this._resolveAgwpeSession(t, radio, `${t.config.id}:${radio.id}:${callTo.toUpperCase()}`);
     if (!session || session.state !== 'connected') return;
     this._deliverIframePayload(session, payload);
   }
@@ -551,7 +581,7 @@ class TncManager extends EventEmitter {
   _handleAgwpeSessionDisconnected(t, { callFrom, callTo, text }) {
     const radio = this._findRadioForAgwpeEvent(t, callFrom);
     if (!radio) return;
-    const session = this.sessions.get(`${t.config.id}:${radio.id}:${callTo.toUpperCase()}`);
+    const session = this._resolveAgwpeSession(t, radio, `${t.config.id}:${radio.id}:${callTo.toUpperCase()}`);
     if (!session) return;
     if (session.state === 'connecting') { this._giveUp(session, `Connection to ${session.remoteCall} failed or was refused.`); return; }
     // The AGWPE server's own 'd' frame can carry a real reason (e.g. its
@@ -749,6 +779,7 @@ class TncManager extends EventEmitter {
     if (this.sessionLogger) this.sessionLogger.stopLog(session);
     this.emit('session-state', this._sessionSnapshot(session));
     this.sessions.delete(session.key);
+    if (session.agwpeAliasKey) this.sessions.delete(session.agwpeAliasKey); // see _resolveAgwpeSession()
   }
 
   // Same teardown, plus a session-error explaining why — for every "we
