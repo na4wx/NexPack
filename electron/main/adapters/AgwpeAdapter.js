@@ -39,6 +39,10 @@ function buildAgwFrame(opts) {
   return Buffer.concat([header, payload]);
 }
 
+function readCall(header, offset) {
+  return header.toString('ascii', offset, offset + 10).replace(/\0.*$/, '').trim().toUpperCase();
+}
+
 class AgwpeAdapter extends EventEmitter {
   constructor({ host = '127.0.0.1', port = 8000, callsign = 'N0CALL', reconnectMs = 5000 }) {
     super();
@@ -100,9 +104,19 @@ class AgwpeAdapter extends EventEmitter {
       this.emit('portInfo', this.portInfo);
     } else if (dataKind === 'X') {
       this.emit('registered', data.length > 0 ? data.readUInt8(0) === 1 : true);
+    } else if (dataKind === 'C') {
+      // Native connected-mode session established (either our own outbound
+      // 'C' request succeeded, or a remote station connected to us) — see
+      // connectSession()/sendSessionData()/disconnectSession() below for
+      // why this app uses these instead of injecting a raw SABM via 'K'.
+      this.emit('session-connected', { port, callFrom: readCall(header, 8), callTo: readCall(header, 18), text: data.toString('ascii') });
+    } else if (dataKind === 'D') {
+      this.emit('session-data', { port, callFrom: readCall(header, 8), callTo: readCall(header, 18), payload: data });
+    } else if (dataKind === 'd') {
+      this.emit('session-disconnected', { port, callFrom: readCall(header, 8), callTo: readCall(header, 18), text: data.toString('ascii') });
     }
-    // Other dataKinds (connected-mode 'C'/'D'/'d', heard-list 'H', etc.) are
-    // out of scope for milestone 1 (raw/UI-frame terminal + monitor only).
+    // Other dataKinds (heard-list 'H', outstanding-frame counts 'y'/'Y',
+    // etc.) are out of scope — not needed for anything this app does.
   }
 
   _send(buf) {
@@ -110,11 +124,42 @@ class AgwpeAdapter extends EventEmitter {
     this.socket.write(buf);
   }
 
-  // Sends a raw AX.25 UI frame (already built via ax25.js's buildAx25Frame)
-  // out a given AGWPE port.
+  // Sends a raw, already-built AX.25 frame (ax25.js's buildAx25Frame) out a
+  // given AGWPE port via 'K' — per the real AGWPE spec (on7lds.net's
+  // AGWPEAPI.HTM), 'K' is meant for UI/unconnected traffic (APRS beacons,
+  // monitoring), and while the spec allows using it for connected-mode
+  // frames too ("could be used to send both connected and unconnected
+  // information"), it explicitly recommends against it: "'K' frame should
+  // be reserved for exceptional cases requiring raw control." Confirmed
+  // live: a real external AGWPE server (UZ7HO Soundmodem) never keyed the
+  // transmitter at all for a raw SABM sent this way — its own connected-
+  // mode dispatcher was never told a session was starting, since that's
+  // what 'C' is for (see connectSession() below). Only used for UI now
+  // (sendUnproto() in TncManager.js) — TncManager's own connected-mode
+  // session methods use connectSession()/sendSessionData()/
+  // disconnectSession() instead, letting the AGWPE server manage the
+  // AX.25 connection itself, exactly as the spec intends.
   sendFrame(port, ax25Frame, { callFrom, callTo } = {}) {
     if (!this.socket || this.socket.destroyed) return this.emit('error', new Error('AGWPE socket not connected'));
     this._send(buildAgwFrame({ port, dataKind: 'K', callFrom: callFrom || this.callsign, callTo: callTo || 'CQ', data: Buffer.concat([Buffer.from([0]), ax25Frame]) }));
+  }
+
+  // Native connected-mode session control — the spec-correct way to drive
+  // an AX.25 connection through a real external AGWPE server (see the long
+  // comment on sendFrame() above for why 'K' isn't used for this).
+  connectSession(port, callFrom, callTo) {
+    if (!this.socket || this.socket.destroyed) return this.emit('error', new Error('AGWPE socket not connected'));
+    this._send(buildAgwFrame({ port, dataKind: 'C', callFrom, callTo }));
+  }
+
+  sendSessionData(port, callFrom, callTo, data) {
+    if (!this.socket || this.socket.destroyed) return this.emit('error', new Error('AGWPE socket not connected'));
+    this._send(buildAgwFrame({ port, dataKind: 'D', pid: 0xf0, callFrom, callTo, data }));
+  }
+
+  disconnectSession(port, callFrom, callTo) {
+    if (!this.socket || this.socket.destroyed) return this.emit('error', new Error('AGWPE socket not connected'));
+    this._send(buildAgwFrame({ port, dataKind: 'd', callFrom, callTo }));
   }
 
   close() {

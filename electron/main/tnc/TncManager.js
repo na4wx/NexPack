@@ -37,6 +37,11 @@ function parseSupervisory(control) {
 // so this has to live here.
 const SABM_RETRY_COUNT = 5;
 const SABM_RETRY_MS = 6000;
+// Matches the raw path's own worst-case give-up time (SABM_RETRY_COUNT *
+// SABM_RETRY_MS + the first interval) — the AGWPE server owns SABM retry
+// timing itself for a native session, this is purely the client-side
+// backstop for a server that never replies to 'C' at all.
+const AGWPE_CONNECT_TIMEOUT_MS = 36000;
 
 // Same story for outstanding I-frames: a real AX.25 stack keeps every
 // unacknowledged I-frame around and retransmits it — on an explicit REJ
@@ -89,7 +94,7 @@ function id() { return crypto.randomUUID(); }
 // NexDigi has no equivalent of (its channelManager.js is a flat
 // channel->adapter map with no TNC/radio hierarchy) — deliberately new.
 class TncManager extends EventEmitter {
-  constructor({ configPath, userDataDir, soundModemManager, sabmRetryMs, sabmRetryCount, iframeRetryMs, iframeRetryCount, maxOutstandingIframes, t3IdleMs, t3MissedPollLimit } = {}) {
+  constructor({ configPath, userDataDir, soundModemManager, sabmRetryMs, sabmRetryCount, iframeRetryMs, iframeRetryCount, maxOutstandingIframes, t3IdleMs, t3MissedPollLimit, agwpeConnectTimeoutMs } = {}) {
     super();
     this.configPath = configPath;
     this.soundModemManager = soundModemManager || null;
@@ -99,6 +104,7 @@ class TncManager extends EventEmitter {
     // Overridable only for tests, which can't afford the real worst-case timing.
     this.sabmRetryMs = sabmRetryMs || SABM_RETRY_MS;
     this.sabmRetryCount = sabmRetryCount !== undefined ? sabmRetryCount : SABM_RETRY_COUNT;
+    this.agwpeConnectTimeoutMs = agwpeConnectTimeoutMs || AGWPE_CONNECT_TIMEOUT_MS;
     this.iframeRetryMs = iframeRetryMs || IFRAME_RETRY_MS;
     this.iframeRetryCount = iframeRetryCount !== undefined ? iframeRetryCount : IFRAME_RETRY_COUNT;
     this.maxOutstandingIframes = maxOutstandingIframes || MAX_OUTSTANDING_IFRAMES;
@@ -233,8 +239,18 @@ class TncManager extends EventEmitter {
     adapter.on('close', () => this._setStatus(t, 'disconnected'));
     adapter.on('error', (e) => this._setStatus(t, 'error', e));
     if (config.type === 'agwpe') {
-      adapter.on('frame', ({ port, ax25Frame }) => this._handleIncomingAx25(t, port, ax25Frame));
+      // Monitor display only (raw 'K'-kind frames the server hears) — NOT
+      // routed through _handleIncomingAx25's connected-mode state machine.
+      // Connected-mode sessions (SABM/I/RR) over a real external AGWPE
+      // server are driven by the server's own native 'C'/'D'/'d' commands
+      // instead (see AgwpeAdapter.js's connectSession() for why), wired
+      // below — running both would create two independent, conflicting
+      // ideas of the same session's state.
+      adapter.on('frame', ({ port, ax25Frame }) => this._handleAgwpeMonitorFrame(t, port, ax25Frame));
       adapter.on('portInfo', (ports) => this.emit('port-info', { tncId: config.id, ports }));
+      adapter.on('session-connected', (evt) => this._handleAgwpeSessionConnected(t, evt));
+      adapter.on('session-data', (evt) => this._handleAgwpeSessionData(t, evt));
+      adapter.on('session-disconnected', (evt) => this._handleAgwpeSessionDisconnected(t, evt));
     } else {
       adapter.on('data', (chunk) => this._onRawKissData(t, chunk));
     }
@@ -478,6 +494,68 @@ class TncManager extends EventEmitter {
     }
   }
 
+  // Monitor-display-only counterpart to _handleIncomingAx25, used for
+  // 'agwpe'-type TNCs instead: shows every raw frame the server hears (same
+  // as before) without running the connected-mode state machine on it —
+  // that's driven by the server's own semantic 'C'/'D'/'d' events for this
+  // TNC type (see _wireAdapter()'s comment for why running both would
+  // conflict).
+  _handleAgwpeMonitorFrame(t, portNumber, ax25Frame) {
+    let parsed;
+    try { parsed = parseAx25Frame(ax25Frame); } catch (e) {
+      this.emit('monitor', { tncId: t.config.id, radioId: null, direction: 'rx', frameType: 'error', timestamp: Date.now(), text: `malformed frame: ${e.message}`, raw: ax25Frame.toString('hex') });
+      return;
+    }
+    if (!parsed.addresses || parsed.addresses.length < 2) return;
+    const destAddr = parsed.addresses[0];
+    const destCall = destAddr.ssid ? `${destAddr.callsign}-${destAddr.ssid}` : destAddr.callsign;
+    const onThisPort = t.config.radios.filter((r) => (r.portNumber || 0) === portNumber);
+    const radio = onThisPort.find((r) => String(r.callsign || '').toUpperCase() === destCall.toUpperCase()) || this._radioForPort(t, portNumber);
+    const frameType = classifyControl(parsed.control);
+    this._emitMonitor(t, radio, 'rx', frameType, parsed, ax25Frame);
+  }
+
+  // Finds (or, for an unsolicited inbound connection, creates) the session
+  // a native AGWPE session event belongs to. AGWPE's own convention keeps
+  // CallFrom as the LOCAL station and CallTo as the remote one regardless
+  // of who initiated — confirmed against this app's own AgwpeBridgeServer,
+  // which does the same from the server side.
+  _findRadioForAgwpeEvent(t, callFrom) {
+    return t.config.radios.find((r) => String(r.callsign || '').toUpperCase() === callFrom.toUpperCase());
+  }
+
+  _handleAgwpeSessionConnected(t, { callFrom, callTo }) {
+    const radio = this._findRadioForAgwpeEvent(t, callFrom);
+    if (!radio) return;
+    const remoteCall = callTo.toUpperCase();
+    const sessionKey = `${t.config.id}:${radio.id}:${remoteCall}`;
+    let session = this.sessions.get(sessionKey);
+    if (session && session.state === 'connected') return; // redundant notice
+    if (!session) session = this._newSession(t, radio, remoteCall, sessionKey); // unsolicited inbound connect
+    session.viaAgwpeNative = true;
+    this._clearSabmRetry(session); // clears the connect backstop armed in startSession(), if any
+    session.state = 'connected';
+    if (this.sessionLogger) this.sessionLogger.startLog(session);
+    this.emit('session-state', this._sessionSnapshot(session));
+  }
+
+  _handleAgwpeSessionData(t, { callFrom, callTo, payload }) {
+    const radio = this._findRadioForAgwpeEvent(t, callFrom);
+    if (!radio) return;
+    const session = this.sessions.get(`${t.config.id}:${radio.id}:${callTo.toUpperCase()}`);
+    if (!session || session.state !== 'connected') return;
+    this._deliverIframePayload(session, payload);
+  }
+
+  _handleAgwpeSessionDisconnected(t, { callFrom, callTo }) {
+    const radio = this._findRadioForAgwpeEvent(t, callFrom);
+    if (!radio) return;
+    const session = this.sessions.get(`${t.config.id}:${radio.id}:${callTo.toUpperCase()}`);
+    if (!session) return;
+    if (session.state === 'connecting') { this._giveUp(session, `Connection to ${session.remoteCall} failed or was refused.`); return; }
+    this._teardownConnected(session);
+  }
+
   // Applies one received I-frame's payload to the session — YAPP transfer,
   // a fresh YAPP init, or plain text — exactly once, in correct N(S) order
   // (called either immediately or when draining session.pendingRx).
@@ -565,6 +643,14 @@ class TncManager extends EventEmitter {
   // link (round-trip ack time often 1-3+ seconds) it otherwise would on
   // anything but a tiny transfer.
   _enqueueIframe(t, radio, session, payload) {
+    if (session.viaAgwpeNative) {
+      // The AGWPE server owns I-frame windowing/sequencing/retransmission
+      // for a native session — 'D' just hands it the next chunk of data,
+      // no N(S)/N(R) bookkeeping or our own retry timers needed here.
+      t.adapter.sendSessionData(radio.portNumber || 0, radio.callsign, session.remoteCall, payload);
+      this._emitMonitor(t, radio, 'tx', 'iframe', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: 0, payload }, Buffer.alloc(0));
+      return;
+    }
     if (session.sentFrames.length < this.maxOutstandingIframes && !session.peerBusy) {
       this._transmitIframe(t, radio, session, payload);
     } else {
@@ -731,6 +817,26 @@ class TncManager extends EventEmitter {
     if (!t.adapter) throw new Error(`TNC "${t.config.name || tncId}" is not connected — connect it before starting a session.`);
     const sessionKey = `${tncId}:${radioId}:${remoteCall}`;
     const session = this._newSession(t, radio, remoteCall, sessionKey, digiPath, scriptId);
+    if (t.config.type === 'agwpe') {
+      // Real external AGWPE server (UZ7HO, Direwolf, etc.) — let it manage
+      // the AX.25 connection itself via 'C', instead of injecting a raw
+      // SABM via 'K' (see AgwpeAdapter.js's sendFrame() for why that
+      // doesn't actually key the transmitter on a real server). digiPath
+      // isn't threaded through here — AGWPE's 'v'/via-digipeater variant
+      // isn't implemented, matching this app's Winlink RF use case, which
+      // never needs one.
+      session.viaAgwpeNative = true;
+      t.adapter.connectSession(radio.portNumber || 0, radio.callsign, remoteCall);
+      // Some AGWPE servers may never send anything back at all for a
+      // station that never answers — this is the same backstop role
+      // _armSabmRetry's give-up plays for the raw path, just without the
+      // retries themselves (the server owns SABM retry timing now).
+      session.retryTimer = setTimeout(() => {
+        if (this.sessions.get(sessionKey) !== session || session.state !== 'connecting') return;
+        this._giveUp(session, `No response from ${session.remoteCall} after ${Math.round(this.agwpeConnectTimeoutMs / 1000)}s.`);
+      }, this.agwpeConnectTimeoutMs);
+      return this._sessionSnapshot(session);
+    }
     const frame = buildAx25Frame({ dest: remoteCall, src: radio.callsign, control: CTL.SABM_P, pid: null, payload: Buffer.alloc(0), path: session.path });
     this._txAx25Frame(t, radio, frame);
     this._emitMonitor(t, radio, 'tx', 'sabm', { addresses: [{ callsign: remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.SABM_P, payload: Buffer.alloc(0) }, frame);
@@ -775,6 +881,11 @@ class TncManager extends EventEmitter {
     if (!session) return;
     const t = this.tncs.get(session.tncId);
     const radio = t.config.radios.find((r) => r.id === session.radioId);
+    if (session.viaAgwpeNative) {
+      t.adapter.disconnectSession(radio.portNumber || 0, radio.callsign, session.remoteCall);
+      this._teardownConnected(session);
+      return;
+    }
     const frame = buildAx25Frame({ dest: session.remoteCall, src: radio.callsign, control: CTL.DISC_P, pid: null, payload: Buffer.alloc(0), path: session.path });
     this._txAx25Frame(t, radio, frame);
     this._emitMonitor(t, radio, 'tx', 'disc', { addresses: [{ callsign: session.remoteCall, ssid: 0 }, { callsign: radio.callsign, ssid: 0 }], control: CTL.DISC_P, payload: Buffer.alloc(0) }, frame);
