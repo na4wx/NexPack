@@ -547,13 +547,20 @@ class TncManager extends EventEmitter {
     this._deliverIframePayload(session, payload);
   }
 
-  _handleAgwpeSessionDisconnected(t, { callFrom, callTo }) {
+  _handleAgwpeSessionDisconnected(t, { callFrom, callTo, text }) {
     const radio = this._findRadioForAgwpeEvent(t, callFrom);
     if (!radio) return;
     const session = this.sessions.get(`${t.config.id}:${radio.id}:${callTo.toUpperCase()}`);
     if (!session) return;
     if (session.state === 'connecting') { this._giveUp(session, `Connection to ${session.remoteCall} failed or was refused.`); return; }
-    this._teardownConnected(session);
+    // The AGWPE server's own 'd' frame can carry a real reason (e.g. its
+    // own idle/ack timeout, or the remote station disconnecting) — surface
+    // it via _giveUp (which now correctly reaches pat's log, see the
+    // comment on _giveUp itself) instead of the bridge's generic fallback
+    // text, so a real server-reported reason is visible for once.
+    const reason = (text || '').replace(/^\*{3}\s*/, '').trim();
+    if (reason) this._giveUp(session, reason);
+    else this._teardownConnected(session);
   }
 
   // Applies one received I-frame's payload to the session — YAPP transfer,
@@ -746,8 +753,17 @@ class TncManager extends EventEmitter {
   // Same teardown, plus a session-error explaining why — for every "we
   // gave up" path (SABM/I-frame/T3 retries exhausted, connection refused).
   _giveUp(session, message) {
-    this._teardownConnected(session);
+    // 'session-error' MUST fire before _teardownConnected's own
+    // 'session-state':'disconnected' emit, not after — AgwpeBridgeServer
+    // listens to both and reacts to whichever it sees FIRST by sending pat
+    // a disconnect and deleting its own session entry; the second event
+    // then finds nothing left to act on. With the order reversed (as this
+    // was before), _giveUp's actual informative message (SABM/I-frame
+    // retries exhausted, T3 idle timeout, connection refused, a real AGWPE
+    // disconnect reason, etc.) NEVER reached pat's own log for any
+    // give-up path — pat only ever saw the bridge's generic fallback text.
     this.emit('session-error', { sessionId: session.id, remoteCall: session.remoteCall, message });
+    this._teardownConnected(session);
   }
 
   // ---- outbound: unconnected (UI) ----
